@@ -57,6 +57,16 @@ class ImageLogger(Callback):
             for k in images:
                 N = min(images[k].shape[0], self.max_images)
                 images[k] = images[k][:N]
+
+                # addtions
+                _, channel, _, _ = images[k].shape
+                if(channel > 3):
+                    images[k] = images[k][:, 0:3, :, :]
+                if(channel == 1):
+                    images[k] = torch.cat([images[k],images[k],images[k]], axis=1)
+                print(images[k].shape)
+                # ======================
+
                 if isinstance(images[k], torch.Tensor):
                     images[k] = images[k].detach().cpu()
                     if self.clamp:
