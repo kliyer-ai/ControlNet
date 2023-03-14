@@ -4,12 +4,12 @@ import numpy as np
 
 from torch.utils.data import Dataset
 
-PATH = './data/mine/'
+PATH = './data/char/'
 
 class MyDataset(Dataset):
     def __init__(self):
         self.data = []
-        with open('./data/char/data.json', 'rt') as f:
+        with open(PATH + 'data.json', 'rt') as f:
             for line in f:
                 self.data.append(json.loads(line))
 
