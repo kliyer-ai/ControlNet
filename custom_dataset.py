@@ -9,7 +9,7 @@ PATH = './data/mine/'
 class MyDataset(Dataset):
     def __init__(self):
         self.data = []
-        with open('./data/char/prompt.json', 'rt') as f:
+        with open('./data/char/data.json', 'rt') as f:
             for line in f:
                 self.data.append(json.loads(line))
 
@@ -33,13 +33,11 @@ class MyDataset(Dataset):
         target = cv2.cvtColor(target, cv2.COLOR_BGR2RGB)
         source = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
 
-        # Normalize source images to [0, 1].
+        # Normalize hint images to [0, 1] as it's a black and white edge map.
         hint = hint.astype(np.float32) / 255.0
 
         # Normalize source images to [-1, 1].
         source = (source.astype(np.float32) / 127.5) - 1.0
-
-        # start should probably be in [-1, 1] as that's the standard range for images
 
         # My Test condition
         hint = np.concatenate([source,hint], axis=-1)
