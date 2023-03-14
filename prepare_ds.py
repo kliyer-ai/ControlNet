@@ -78,9 +78,9 @@ def main():
             # cv2.imwrite(PATH + 'target/' + name + '.png', end)
             # cv2.imwrite(PATH + 'hint/' + name + '.png', detected_map)
             out_str += json.dumps({
-                "source": 'source' + base_name + '.png',
-                "target": 'target' + name + '.png',
-                "hint": 'hint' + name + '.png',
+                "source": 'source/' + base_name + '.png',
+                "target": 'target/' + name + '.png',
+                "hint": 'hint/' + name + '.png',
                 "prompt": ""
             }) + '\n'
 
