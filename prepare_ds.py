@@ -4,8 +4,12 @@ from annotator.canny import CannyDetector
 from annotator.util import resize_image, HWC3
 import json
 from pathlib import Path
+import torch
+from lavis.models import load_model_and_preprocess
 
 apply_canny = CannyDetector()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model, vis_processors, _ = load_model_and_preprocess(name="blip_caption", model_type="base_coco", is_eval=True, device=device)
 
 MIN= 512
 low_threshold = 100
@@ -64,6 +68,15 @@ def main():
         # cv2.imwrite(PATH + 'source/' + base_name + '.png', start)
         print(base_name)
 
+        # preprocess the image
+        raw_image = cv2.cvtColor(start, cv2.COLOR_BGR2RGB)
+        # vis_processors stores image transforms for "train" and "eval" (validation / testing / inference)
+        image = vis_processors["eval"](raw_image).unsqueeze(0).to(device)
+        # generate caption
+        prompts = model.generate({"image": image})
+        prompt = prompts[0]
+        print(prompt)
+
         for frame in [1,2,4]:
             vidcap.set(cv2.CAP_PROP_POS_MSEC,(frame*1000))
             success, end = vidcap.read()
@@ -81,7 +94,7 @@ def main():
                 "source": 'source/' + base_name + '.png',
                 "target": 'target/' + name + '.png',
                 "hint": 'hint/' + name + '.png',
-                "prompt": ""
+                "prompt": prompt
             }) + '\n'
 
     with open(PATH + 'data.json', 'w') as f:
