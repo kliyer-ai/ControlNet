@@ -36,8 +36,9 @@ class MyDataset(Dataset):
         # Normalize hint images to [0, 1] as it's a black and white edge map.
         hint = hint.astype(np.float32) / 255.0
 
-        # Normalize source images to [-1, 1].
-        source = (source.astype(np.float32) / 127.5) - 1.0
+        # Learning: this should also just be normalized to [0, 1]
+        # Will be rescaled in the model to [-1, 1]
+        source = source.astype(np.float32) / 255.0
 
         # My Test condition
         hint = np.concatenate([source,hint], axis=-1)
