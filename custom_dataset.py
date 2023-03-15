@@ -4,7 +4,7 @@ import numpy as np
 
 from torch.utils.data import Dataset
 
-PATH = './data/char/'
+PATH = './data/kin/'
 
 class MyDataset(Dataset):
     def __init__(self):
