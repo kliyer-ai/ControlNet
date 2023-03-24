@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from transformers import T5Tokenizer, T5EncoderModel, CLIPTokenizer, CLIPTextModel, CLIPVisionModel, AutoProcessor, CLIPProcessor, CLIPVisionModelWithProjection
+from transformers import T5Tokenizer, T5EncoderModel, CLIPTokenizer, CLIPTextModel, CLIPVisionModel, AutoProcessor, CLIPProcessor, CLIPVisionModelWithProjection, image_utils 
 
 import open_clip
 from ldm.util import default, count_params
@@ -200,8 +200,8 @@ class FrozenClipImageEmbedder(AbstractEncoder):
         "pooled",
         "hidden"
     ]
-    def __init__(self, version="openai/clip-vit-large-patch14", device="cuda", max_length=77,
-                 freeze=True, layer="last", layer_idx=None):  # clip-vit-base-patch32
+    def __init__(self, version="openai/clip-vit-base-patch16", device="cuda", max_length=77,
+                 freeze=True, layer="last", layer_idx=None):  # clip-vit-base-patch32 # openai/clip-vit-large-patch14
         super().__init__()
         assert layer in self.LAYERS
         self.model = CLIPVisionModel.from_pretrained(version)
@@ -223,11 +223,12 @@ class FrozenClipImageEmbedder(AbstractEncoder):
             param.requires_grad = False
 
     def forward(self, images):
-        inputs = self.processor(images=images, return_tensors="pt")
+        # ipnuts = [self.processor(images=img, return_tensors="pt", data_format=image_utils.ChannelDimension.FIRST) for img in images]
+        if len(images.shape)==4:
+            images = [img for img in images]
+        inputs = self.processor(images=images, return_tensors="pt", data_format=image_utils.ChannelDimension.FIRST)
         imgs = inputs['pixel_values'].to(self.device)
         outputs = self.model(imgs)
-        print('aaaaaaa')
-        print(outputs.pooler_output.shape)
         if self.layer == "last":
             z = outputs.last_hidden_state
         elif self.layer == "pooled":
@@ -280,7 +281,7 @@ class FrozenOpenClipImageEmbedder(nn.Module):
 
     def forward(self, x):
         # x is assumed to be in range [-1,1]
-        return self.model.encode_image(x.to(self.device))
+        return self.model(self.preprocess(x).to(self.device).unsqueeze(0))
     
 
 class FrozenCLIPT5Encoder(AbstractEncoder):

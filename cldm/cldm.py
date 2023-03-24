@@ -2,6 +2,7 @@ import einops
 import torch
 import torch as th
 import torch.nn as nn
+from ldm.modules.encoders.modules import FrozenClipImageEmbedder
 
 from ldm.modules.diffusionmodules.util import (
     conv_nd,
@@ -307,12 +308,14 @@ class ControlNet(nn.Module):
 
 class ControlLDM(LatentDiffusion):
 
-    def __init__(self, control_stage_config, control_key, only_mid_control, *args, **kwargs):
+    def __init__(self, control_stage_config, control_key, style_key, only_mid_control, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control_model = instantiate_from_config(control_stage_config)
         self.control_key = control_key
+        self.style_key = style_key
         self.only_mid_control = only_mid_control
         self.control_scales = [1.0] * 13
+        self.style_encoder = FrozenClipImageEmbedder()
 
     @torch.no_grad()
     def get_input(self, batch, k, bs=None, *args, **kwargs):
@@ -326,15 +329,24 @@ class ControlLDM(LatentDiffusion):
         control = control.to(memory_format=torch.contiguous_format).float()
 
         # I guess here would also be good place to get the clip embedding for the img
+        style = batch[self.style_key]
+        if bs is not None:
+            style = style[:bs]
+        style = style.to(self.device)
+        # style = einops.rearrange(style, 'b h w c -> b c h w')
+        # style = style.to(memory_format=torch.contiguous_format).float()
+        style = self.style_encoder(style)
 
-        return x, dict(c_crossattn=[c], c_concat=[control], control_crossattn=[])
+        return x, dict(c_crossattn=[c], c_concat=[control], c_style=[style])
 
     def apply_model(self, x_noisy, t, cond, *args, **kwargs):
         assert isinstance(cond, dict)
         diffusion_model = self.model.diffusion_model
+        # print('apply model')
+        # print(cond)
 
         cond_txt = torch.cat(cond['c_crossattn'], 1)
-        control_txt = torch.cat(cond['control_crossattn'], 1)
+        control_txt = torch.cat(cond['c_style'], 1)
 
         # here I could maybe add my own cross attention for images
 
@@ -350,6 +362,10 @@ class ControlLDM(LatentDiffusion):
     @torch.no_grad()
     def get_unconditional_conditioning(self, N):
         return self.get_learned_conditioning([""] * N)
+    
+    @torch.no_grad()
+    def get_unconditional_conditioning_style(self, N):
+        return self.get_learned_conditioning([""] * N)
 
     @torch.no_grad()
     def log_images(self, batch, N=4, n_row=2, sample=False, ddim_steps=50, ddim_eta=0.0, return_keys=None,
@@ -361,7 +377,7 @@ class ControlLDM(LatentDiffusion):
 
         log = dict()
         z, c = self.get_input(batch, self.first_stage_key, bs=N)
-        c_cat, c = c["c_concat"][0][:N], c["c_crossattn"][0][:N]
+        c_cat, c, c_style = c["c_concat"][0][:N], c["c_crossattn"][0][:N], c["c_style"][0][:N]
         N = min(z.shape[0], N)
         n_row = min(z.shape[0], n_row)
         log["reconstruction"] = self.decode_first_stage(z)
@@ -388,7 +404,7 @@ class ControlLDM(LatentDiffusion):
 
         if sample:
             # get denoise row
-            samples, z_denoise_row = self.sample_log(cond={"c_concat": [c_cat], "c_crossattn": [c]},
+            samples, z_denoise_row = self.sample_log(cond={"c_concat": [c_cat], "c_crossattn": [c], "c_style": [c_style]},
                                                      batch_size=N, ddim=use_ddim,
                                                      ddim_steps=ddim_steps, eta=ddim_eta)
             x_samples = self.decode_first_stage(samples)
@@ -399,9 +415,10 @@ class ControlLDM(LatentDiffusion):
 
         if unconditional_guidance_scale > 1.0:
             uc_cross = self.get_unconditional_conditioning(N)
+            uc_style = torch.zeros_like(c_style) # self.get_unconditional_conditioning_style(N)
             uc_cat = c_cat  # torch.zeros_like(c_cat)
-            uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross]}
-            samples_cfg, _ = self.sample_log(cond={"c_concat": [c_cat], "c_crossattn": [c]},
+            uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross], "c_style": [uc_style]}
+            samples_cfg, _ = self.sample_log(cond={"c_concat": [c_cat], "c_crossattn": [c], "c_style": [c_style]},
                                              batch_size=N, ddim=use_ddim,
                                              ddim_steps=ddim_steps, eta=ddim_eta,
                                              unconditional_guidance_scale=unconditional_guidance_scale,
