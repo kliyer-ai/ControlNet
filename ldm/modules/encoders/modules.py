@@ -2,10 +2,11 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from transformers import T5Tokenizer, T5EncoderModel, CLIPTokenizer, CLIPTextModel
+from transformers import T5Tokenizer, T5EncoderModel, CLIPTokenizer, CLIPTextModel, CLIPVisionModel, AutoProcessor, CLIPProcessor, CLIPVisionModelWithProjection
 
 import open_clip
 from ldm.util import default, count_params
+import kornia
 
 
 class AbstractEncoder(nn.Module):
@@ -192,7 +193,53 @@ class FrozenOpenCLIPEmbedder(AbstractEncoder):
     def encode(self, text):
         return self(text)
 
-class FrozenClipImageEmbedder(nn.Module):
+class FrozenClipImageEmbedder(AbstractEncoder):
+    """Uses the CLIP transformer encoder for text (from huggingface)"""
+    LAYERS = [
+        "last",
+        "pooled",
+        "hidden"
+    ]
+    def __init__(self, version="openai/clip-vit-large-patch14", device="cuda", max_length=77,
+                 freeze=True, layer="last", layer_idx=None):  # clip-vit-base-patch32
+        super().__init__()
+        assert layer in self.LAYERS
+        self.model = CLIPVisionModel.from_pretrained(version)
+        self.processor = AutoProcessor.from_pretrained(version)
+        self.device = device
+        self.max_length = max_length
+        if freeze:
+            self.freeze()
+        self.layer = layer
+        self.layer_idx = layer_idx
+        if layer == "hidden":
+            assert layer_idx is not None
+            assert 0 <= abs(layer_idx) <= 12
+
+    def freeze(self):
+        self.model = self.model.eval()
+        #self.train = disabled_train
+        for param in self.parameters():
+            param.requires_grad = False
+
+    def forward(self, images):
+        inputs = self.processor(images=images, return_tensors="pt")
+        imgs = inputs['pixel_values'].to(self.device)
+        outputs = self.model(imgs)
+        print('aaaaaaa')
+        print(outputs.pooler_output.shape)
+        if self.layer == "last":
+            z = outputs.last_hidden_state
+        elif self.layer == "pooled":
+            z = outputs.pooler_output[:, None, :]
+        else:
+            z = outputs.hidden_states[self.layer_idx]
+        return z
+
+    def encode(self, image):
+        return self(image)
+
+class FrozenOpenClipImageEmbedder(nn.Module):
     """
         Uses the CLIP image encoder.
         """
@@ -205,15 +252,16 @@ class FrozenClipImageEmbedder(nn.Module):
         ):
         super().__init__()
         # self.model, _ = clip.load(name=model, device=device, jit=jit)
-        model, _, preprocess = open_clip.create_model_and_transforms(arch, device=torch.device('cpu'), pretrained=version)
-        del model.text
+        model, _, preprocess = open_clip.create_model_and_transforms(arch, pretrained=version, device=torch.device(device))
+        # del model.text
         self.model = model
         self.preprocess = preprocess
+        self.device = device
 
         self.antialias = antialias
 
-        self.register_buffer('mean', torch.Tensor([0.48145466, 0.4578275, 0.40821073]), persistent=False)
-        self.register_buffer('std', torch.Tensor([0.26862954, 0.26130258, 0.27577711]), persistent=False)
+        # self.register_buffer('mean', torch.Tensor([0.48145466, 0.4578275, 0.40821073]), persistent=False)
+        # self.register_buffer('std', torch.Tensor([0.26862954, 0.26130258, 0.27577711]), persistent=False)
 
     # def preprocess(self, x):
     #     # normalize to [0,1]
@@ -225,9 +273,14 @@ class FrozenClipImageEmbedder(nn.Module):
     #     x = kornia.enhance.normalize(x, self.mean, self.std)
     #     return x
 
+    def freeze(self):
+        self.model = self.model.eval()
+        for param in self.parameters():
+            param.requires_grad = False
+
     def forward(self, x):
         # x is assumed to be in range [-1,1]
-        return self.model.encode_image(self.preprocess(x))
+        return self.model.encode_image(x.to(self.device))
     
 
 class FrozenCLIPT5Encoder(AbstractEncoder):
