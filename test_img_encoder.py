@@ -9,10 +9,11 @@ import requests
 
 
 # with torch.no_grad(), torch.cuda.amp.autocast():
-model = FrozenClipImageEmbedder()
-other = FrozenCLIPEmbedder()
+imgModel = FrozenClipImageEmbedder()
+# openImgModel = FrozenOpenCLIPEmbedder()
+textModel = FrozenCLIPEmbedder()
 
-print(model)
+print(imgModel)
 
 # the problems are 
 # 1) the sequence length is too long for the image
@@ -20,21 +21,21 @@ print(model)
 
 
 
-# if torch.cuda.is_available():
-#     print('cuda available')
-#     model.cuda()
-#     other.cuda()
+if torch.cuda.is_available():
+    print('cuda available')
+    imgModel.cuda()
+    textModel.cuda()
 # # model.eval()
 
-# # hint = cv2.imread('./data/char/source/LFC6D.png')
-# # img = torch.from_numpy(hint)
+img = cv2.imread('./data/char/source/LFC6D.png')
+img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+# img = torch.from_numpy(hint)
 # img = Image.open('./data/char/source/LFC6D.png').convert('RGB')
 
-# # url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-# # img = Image.open(requests.get(url, stream=True).raw)
+# url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+# img = Image.open(requests.get(url, stream=True).raw)
 
-# test = other(['hello world how are you doing? Thanks!', 'Get the memory footprint of a model. This will return the memory footprint of the current model in bytes. Useful to benchmark the memory footprint of the current model and design some tests.'])
+test = textModel(['hello world how are you doing? Thanks!', 'Get the memory footprint of a model. This will return the memory footprint of the current model in bytes. Useful to benchmark the memory footprint of the current model and design some tests.'])
 
-# print(test.shape)
-# res = model(img)
-# print(res.shape)
+res = imgModel(img)
+print(res.shape)
