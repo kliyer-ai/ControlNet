@@ -224,7 +224,7 @@ class FrozenClipImageEmbedder(AbstractEncoder):
 
     def forward(self, images):
         # ipnuts = [self.processor(images=img, return_tensors="pt", data_format=image_utils.ChannelDimension.FIRST) for img in images]
-        if len(images.shape)==4:
+        if not isinstance(images, (list, tuple)) and len(images.shape)==4:
             images = [img for img in images]
         inputs = self.processor(images=images, return_tensors="pt", data_format=image_utils.ChannelDimension.FIRST)
         imgs = inputs['pixel_values'].to(self.device)

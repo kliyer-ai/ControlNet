@@ -19,6 +19,11 @@ from ldm.models.diffusion.ddpm import LatentDiffusion
 from ldm.util import log_txt_as_img, exists, instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
+# copied from ddpm.py
+def disabled_train(self, mode=True):
+    """Overwrite model.train with this function to make sure train/eval mode
+    does not change anymore."""
+    return self
 
 class ControlledUnetModel(UNetModel):
     def forward(self, x, timesteps=None, context=None, control=None, only_mid_control=False, **kwargs):
@@ -308,14 +313,43 @@ class ControlNet(nn.Module):
 
 class ControlLDM(LatentDiffusion):
 
-    def __init__(self, control_stage_config, control_key, style_key, only_mid_control, *args, **kwargs):
+    def __init__(self, control_stage_config, style_stage_trainable, style_stage_config, control_key, style_key, only_mid_control, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control_model = instantiate_from_config(control_stage_config)
         self.control_key = control_key
         self.style_key = style_key
         self.only_mid_control = only_mid_control
         self.control_scales = [1.0] * 13
-        self.style_encoder = FrozenClipImageEmbedder()
+
+        self.style_stage_trainable = style_stage_trainable
+        self.instantiate_style_stage(style_stage_config)
+        # self.style_encoder = FrozenClipImageEmbedder()
+
+        # open question
+        # - where is time(step?) embedding needed for attention
+        # - where is it added?
+        # - do I still need to do something for the img conditioning
+
+    def instantiate_style_stage(self, config):
+        if not self.style_stage_trainable:
+            if config == "__is_first_stage__":
+                print("Using first stage also as style stage.")
+                self.style_encoder = self.first_stage_model
+            elif config == "__is_unconditional__":
+                print(f"Training {self.__class__.__name__} as an unconditional style model.")
+                self.style_encoder = None
+                # self.be_unconditional = True
+            else:
+                model = instantiate_from_config(config)
+                self.style_encoder = model.eval()
+                self.style_encoder.train = disabled_train
+                for param in self.style_encoder.parameters():
+                    param.requires_grad = False
+        else:
+            assert config != '__is_first_stage__'
+            assert config != '__is_unconditional__'
+            model = instantiate_from_config(config)
+            self.style_encoder = model
 
     @torch.no_grad()
     def get_input(self, batch, k, bs=None, *args, **kwargs):
@@ -415,7 +449,7 @@ class ControlLDM(LatentDiffusion):
 
         if unconditional_guidance_scale > 1.0:
             uc_cross = self.get_unconditional_conditioning(N)
-            uc_style = torch.zeros_like(c_style) # self.get_unconditional_conditioning_style(N)
+            uc_style = c_style # torch.zeros_like(c_style) # self.get_unconditional_conditioning_style(N)
             uc_cat = c_cat  # torch.zeros_like(c_cat)
             uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross], "c_style": [uc_style]}
             samples_cfg, _ = self.sample_log(cond={"c_concat": [c_cat], "c_crossattn": [c], "c_style": [c_style]},
