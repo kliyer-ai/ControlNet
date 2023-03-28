@@ -1,6 +1,7 @@
 from share import *
 
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 from custom_dataset_cross import MyDataset
 from cldm.logger import ImageLogger
@@ -27,8 +28,12 @@ model.only_mid_control = only_mid_control
 # Misc
 dataset = MyDataset()
 dataloader = DataLoader(dataset, num_workers=0, batch_size=batch_size, shuffle=True)
-logger = ImageLogger(batch_frequency=logger_freq, name='char_cross_1')
-trainer = pl.Trainer(gpus=1, precision=32, callbacks=[logger])
+
+logger = ImageLogger(batch_frequency=logger_freq, name='char_cross_2')
+wandb_logger = WandbLogger(project="ControlNet")
+
+trainer = pl.Trainer(gpus=1, precision=32, callbacks=[logger], logger=wandb_logger)
+
 
 
 # Train!

@@ -416,6 +416,10 @@ class ControlLDM(LatentDiffusion):
         n_row = min(z.shape[0], n_row)
         log["reconstruction"] = self.decode_first_stage(z)
         log["control"] = c_cat * 2.0 - 1.0
+        
+        style = batch[self.style_key]
+        style = einops.rearrange(style, 'b h w c -> b c h w')
+        log["style"] = style
         log["conditioning"] = log_txt_as_img((512, 512), batch[self.cond_stage_key], size=16)
 
         if plot_diffusion_rows:

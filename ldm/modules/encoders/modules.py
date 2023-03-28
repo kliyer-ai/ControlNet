@@ -223,10 +223,11 @@ class FrozenClipImageEmbedder(AbstractEncoder):
             param.requires_grad = False
 
     def forward(self, images):
-        # ipnuts = [self.processor(images=img, return_tensors="pt", data_format=image_utils.ChannelDimension.FIRST) for img in images]
         if not isinstance(images, (list, tuple)) and len(images.shape)==4:
             images = [img for img in images]
-        inputs = self.processor(images=images, return_tensors="pt", data_format=image_utils.ChannelDimension.FIRST)
+
+        # data_format=image_utils.ChannelDimension.FIRST
+        inputs = self.processor(images=images, return_tensors="pt")
         imgs = inputs['pixel_values'].to(self.device)
         outputs = self.model(imgs)
         if self.layer == "last":

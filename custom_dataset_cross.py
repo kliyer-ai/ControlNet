@@ -46,6 +46,9 @@ class MyDataset(Dataset):
         # Normalize target images to [-1, 1].
         target = (target.astype(np.float32) / 127.5) - 1.0
 
+        # Normalize source images to [-1, 1] which will serve as the style.
+        source = (source.astype(np.float32) / 127.5) - 1.0
+
         # style does not need to get normalized as it happens in the model later
         return dict(jpg=target, txt=prompt, hint=hint, style=source)
 

@@ -73,7 +73,10 @@ class ImageLogger(Callback):
                     if self.clamp:
                         images[k] = torch.clamp(images[k], -1., 1.)
 
-            self.log_local(pl_module.logger.save_dir, split, images,
+            # pl_module.logger.save_dir
+            # for somem reason this is None when using wandb logger
+            # print(pl_module.logger.save_dir)
+            self.log_local('./', split, images,
                            pl_module.global_step, pl_module.current_epoch, batch_idx)
 
             if is_train:
