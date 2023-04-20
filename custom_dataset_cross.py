@@ -4,12 +4,18 @@ import numpy as np
 
 from torch.utils.data import Dataset
 
-PATH = './data/char/'
+
 
 class MyDataset(Dataset):
-    def __init__(self):
+    def __init__(self, name):
+
+        if name == 'kin':
+            self.path = './data/kin/'
+        elif name == 'char':
+            self.path = './data/char/'
+
         self.data = []
-        with open(PATH + 'data.json', 'rt') as f:
+        with open(self.path + 'data.json', 'rt') as f:
             for line in f:
                 self.data.append(json.loads(line))
 
@@ -24,9 +30,9 @@ class MyDataset(Dataset):
         target_filename = item['target']
         prompt = item['prompt']
 
-        hint = cv2.imread(PATH + hint_filename)
-        source = cv2.imread(PATH + source_filename)
-        target = cv2.imread(PATH + target_filename)
+        hint = cv2.imread(self.path + hint_filename)
+        source = cv2.imread(self.path + source_filename)
+        target = cv2.imread(self.path + target_filename)
 
         # Do not forget that OpenCV read images in BGR order.
         hint = cv2.cvtColor(hint, cv2.COLOR_BGR2RGB)
@@ -47,7 +53,8 @@ class MyDataset(Dataset):
         target = (target.astype(np.float32) / 127.5) - 1.0
 
         # Normalize source images to [-1, 1] which will serve as the style.
-        source = (source.astype(np.float32) / 127.5) - 1.0
+        # DONT DO THIS BECAUSE HUGGING FACE AUTO PROCESSOR EXPECTS [0, 255]
+        # source = (source.astype(np.float32) / 127.5) - 1.0
 
         # style does not need to get normalized as it happens in the model later
         return dict(jpg=target, txt=prompt, hint=hint, style=source)

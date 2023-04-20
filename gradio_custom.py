@@ -16,9 +16,8 @@ from cldm.ddim_hacked import DDIMSampler
 
 
 apply_canny = CannyDetector()
-
 model = create_model('./models/cldm_v15_cross.yaml').cpu()
-model.load_state_dict(load_state_dict('./lightning_logs/version_21/checkpoints/epoch=53-step=168965.ckpt', location='cuda'))
+model.load_state_dict(load_state_dict('./ControlNet_kin_cross_2/sjlytpz5_0/checkpoints/epoch=20-step=272705.ckpt', location='cuda'))
 model = model.cuda()
 ddim_sampler = DDIMSampler(model)
 
