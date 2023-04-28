@@ -28,17 +28,21 @@ class ImageLogger(Callback):
     @rank_zero_only
     def log_local(self, save_dir, split, images, global_step, current_epoch, batch_idx):
         root = os.path.join(save_dir, "image_log", self.name, split)
+        
+        imgs = []
         for k in images:
-            grid = torchvision.utils.make_grid(images[k], nrow=4)
-            if self.rescale:
-                grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
-            grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
-            grid = grid.numpy()
-            grid = (grid * 255).astype(np.uint8)
-            filename = "{}_gs-{:06}_e-{:06}_b-{:06}.png".format(k, global_step, current_epoch, batch_idx)
-            path = os.path.join(root, filename)
-            os.makedirs(os.path.split(path)[0], exist_ok=True)
-            Image.fromarray(grid).save(path)
+            imgs += images[k]
+
+        grid = torchvision.utils.make_grid(imgs, nrow=self.max_images)
+        if self.rescale:
+            grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+        grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+        grid = grid.numpy()
+        grid = (grid * 255).astype(np.uint8)
+        filename = "gs-{:06}_e-{:06}_b-{:06}.png".format(global_step, current_epoch, batch_idx)
+        path = os.path.join(root, filename)
+        os.makedirs(os.path.split(path)[0], exist_ok=True)
+        Image.fromarray(grid).save(path)
 
     def log_img(self, pl_module, batch, batch_idx, split="train"):
         check_idx = batch_idx  # if self.log_on_batch_idx else pl_module.global_step
@@ -55,6 +59,8 @@ class ImageLogger(Callback):
             with torch.no_grad():
                 images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
 
+            # images is a dict
+            # so k is key
             for k in images:
                 N = min(images[k].shape[0], self.max_images)
                 images[k] = images[k][:N]
