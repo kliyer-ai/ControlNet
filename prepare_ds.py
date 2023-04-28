@@ -6,8 +6,11 @@ import json
 from pathlib import Path
 import torch
 from PIL import Image
+from annotator.hed import HEDdetector
 
 apply_canny = CannyDetector()
+apply_hed = HEDdetector()
+
 
 from lavis.models import load_model_and_preprocess
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -15,10 +18,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MIN= 512
 low_threshold = 100
 high_threshold = 200
-OUT_PATH = './data/kin/'
+OUT_PATH = './data/kin_hed/'
 IN_PATH = '/export/compvis-nfs/group/datasets/kinetics-dataset/k700-2020/train/*/*'
-GENERATE_PROMPT = True
-SKIP = 10
+GENERATE_PROMPT = False
+SKIP = 2
+
+
 
 def extractImages(pathIn, pathOut):
     count = 0
@@ -67,8 +72,7 @@ def generate_prompt(raw_image):
     return prompt
 
 def main():
-    Path(OUT_PATH + "source").mkdir(parents=True, exist_ok=True)
-    Path(OUT_PATH + "target").mkdir(parents=True, exist_ok=True)
+    Path(OUT_PATH + "jpg").mkdir(parents=True, exist_ok=True)
     Path(OUT_PATH + "hint").mkdir(parents=True, exist_ok=True)
     # read video
     paths = glob.glob(IN_PATH)
@@ -86,7 +90,7 @@ def main():
 
         start = center_crop_img(start)
         base_name = path.split('/')[-1].split('.')[0]
-        cv2.imwrite(OUT_PATH + 'source/' + base_name + '.png', start)
+        cv2.imwrite(OUT_PATH + 'jpg/' + base_name + '_f0.png', start)
         print(base_name)
 
         prompt = ""
@@ -95,23 +99,27 @@ def main():
             raw_image = cv2.cvtColor(start, cv2.COLOR_BGR2RGB)
             prompt = generate_prompt(raw_image)
         
-
-        for frame in [1,2,4]:
-            vidcap.set(cv2.CAP_PROP_POS_MSEC,(frame*1000))
+        for frame_id in [1,2,3,4]:
+            frame = frame_id * 6
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, frame)
             success, end = vidcap.read()
             if not success: continue
 
             end = center_crop_img(end)
 
-            detected_map = apply_canny(end, low_threshold, high_threshold)
+            # detected_map = apply_canny(end, low_threshold, high_threshold)
+            # detected_map = HWC3(detected_map)
+
+            detected_map = apply_hed(end)
             detected_map = HWC3(detected_map)
 
+            prev_name = base_name + '_f' + str((frame_id - 1) * 6)
             name = base_name + '_f' + str(frame)
-            cv2.imwrite(OUT_PATH + 'target/' + name + '.png', end)
+            cv2.imwrite(OUT_PATH + 'jpg/' + name + '.png', end)
             cv2.imwrite(OUT_PATH + 'hint/' + name + '.png', detected_map)
             out_str += json.dumps({
-                "source": 'source/' + base_name + '.png',
-                "target": 'target/' + name + '.png',
+                "source": 'jpg/' + prev_name + '.png',
+                "target": 'jpg/' + name + '.png',
                 "hint": 'hint/' + name + '.png',
                 "prompt": prompt
             }) + '\n'
