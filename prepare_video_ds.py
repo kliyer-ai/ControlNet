@@ -6,11 +6,8 @@ import json
 from pathlib import Path
 import torch
 from PIL import Image
-from annotator.hed import HEDdetector
 
 apply_canny = CannyDetector()
-apply_hed = HEDdetector()
-
 
 from lavis.models import load_model_and_preprocess
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -18,13 +15,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MIN= 512
 low_threshold = 100
 high_threshold = 200
-OUT_PATH = './data/kin_hed_val/'
-IN_PATH = '/export/compvis-nfs/group/datasets/kinetics-dataset/k700-2020/val/*/*'
-GENERATE_PROMPT = False
-SKIP = 2
+OUT_PATH = './data/kin_vid/'
+IN_PATH = '/export/compvis-nfs/group/datasets/kinetics-dataset/k700-2020/train/*/*'
+GENERATE_PROMPT = True
+SKIP = 10
 
-gap_ms = 500
-gap_f = 6
 
 
 def extractImages(pathIn, pathOut):
@@ -74,7 +69,8 @@ def generate_prompt(raw_image):
     return prompt
 
 def main():
-    Path(OUT_PATH + "jpg").mkdir(parents=True, exist_ok=True)
+    Path(OUT_PATH + "source").mkdir(parents=True, exist_ok=True)
+    Path(OUT_PATH + "target").mkdir(parents=True, exist_ok=True)
     Path(OUT_PATH + "hint").mkdir(parents=True, exist_ok=True)
     # read video
     paths = glob.glob(IN_PATH)
@@ -92,7 +88,7 @@ def main():
 
         start = center_crop_img(start)
         base_name = path.split('/')[-1].split('.')[0]
-        cv2.imwrite(OUT_PATH + 'jpg/' + base_name + '_idx0.png', start)
+        cv2.imwrite(OUT_PATH + 'source/' + base_name + '.png', start)
         print(base_name)
 
         prompt = ""
@@ -101,37 +97,31 @@ def main():
             raw_image = cv2.cvtColor(start, cv2.COLOR_BGR2RGB)
             prompt = generate_prompt(raw_image)
         
-        for idx in [1,2,3,4]:
-            gap = gap_ms # or gap_f
-            diff = idx * gap
-            # vidcap.set(cv2.CAP_PROP_POS_FRAMES, frame)
-            vidcap.set(cv2.CAP_PROP_POS_MSEC, diff)
+        for frame in [1,2,3,4,5,6,7]:
+            vidcap.set(cv2.CAP_PROP_POS_FRAMES, frame*6)
             success, end = vidcap.read()
             if not success: continue
 
             end = center_crop_img(end)
 
-            # detected_map = apply_canny(end, low_threshold, high_threshold)
-            # detected_map = HWC3(detected_map)
-
-            detected_map = apply_hed(end)
+            detected_map = apply_canny(end, low_threshold, high_threshold)
             detected_map = HWC3(detected_map)
 
-            prev_name = base_name + '_idx' + str((idx - 1) * gap)
-            name = base_name + '_idx' + str(diff)
-            cv2.imwrite(OUT_PATH + 'jpg/' + name + '.png', end)
+            name = base_name + '    ' + str(frame)
+            cv2.imwrite(OUT_PATH + 'target/' + name + '.png', end)
             cv2.imwrite(OUT_PATH + 'hint/' + name + '.png', detected_map)
             out_str += json.dumps({
-                "source": 'jpg/' + prev_name + '.png',
-                "target": 'jpg/' + name + '.png',
+                "source": 'source/' + base_name + '.png',
+                "target": 'target/' + name + '.png',
                 "hint": 'hint/' + name + '.png',
                 "prompt": prompt
             }) + '\n'
 
+            
+      
+
     with open(OUT_PATH + 'data.json', 'w') as f:
         f.write(out_str)
-
-    print('done.')
 
   
 

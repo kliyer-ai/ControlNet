@@ -8,11 +8,7 @@ from torch.utils.data import Dataset
 
 class MyDataset(Dataset):
     def __init__(self, name):
-
-        if name == 'kin':
-            self.path = './data/kin/'
-        elif name == 'char':
-            self.path = './data/char/'
+        self.path = './data/' + name + '/'
 
         self.data = []
         with open(self.path + 'data.json', 'rt') as f:
@@ -57,5 +53,5 @@ class MyDataset(Dataset):
         # source = (source.astype(np.float32) / 127.5) - 1.0
 
         # style does not need to get normalized as it happens in the model later
-        return dict(jpg=target, txt=prompt, hint=hint, style=source)
+        return dict(jpg=target, txt="a professional, detailed, high-quality image", hint=hint, style=source)
 

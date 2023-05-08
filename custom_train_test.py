@@ -10,7 +10,7 @@ import torch
 
 
 # Configs
-resume_path = './models/control_v15_cross_ini.ckpt'
+resume_path = './models/control_v15_concat_style.ckpt'
 batch_size = 4
 logger_freq = 300
 learning_rate = 1e-5
@@ -18,14 +18,14 @@ sd_locked = True
 only_mid_control = False
 
 
-dataset = MyDataset('kin')
+dataset = MyDataset('kin_hed')
 
 
 
 # print(dataset[0])
 
 # First use cpu to load models. Pytorch Lightning will automatically move it to GPUs.
-model = create_model('./models/cldm_v15_cross.yaml').cpu()
+model = create_model('./models/cldm_v15_concat.yaml').cpu()
 model.load_state_dict(load_state_dict(resume_path, location='cuda'))
 model = model.cuda()
 model.learning_rate = learning_rate
@@ -34,21 +34,21 @@ model.only_mid_control = only_mid_control
 
 print(model)
 
-dp = dataset[0]
+# dp = dataset[0]
 
-dp['jpg'] = torch.Tensor([dp['jpg']])
-dp['hint'] = torch.Tensor([dp['hint']])
-dp['style'] = torch.Tensor([dp['style']])
-dp['txt'] = [dp['txt']]
+# dp['jpg'] = torch.Tensor([dp['jpg']])
+# dp['hint'] = torch.Tensor([dp['hint']])
+# dp['style'] = torch.Tensor([dp['style']])
+# dp['txt'] = [dp['txt']]
 
-x, c = model.get_input(dp, 1)
+# x, c = model.get_input(dp, 1)
 
 
 # 768
 # v = torch.ones((1,512,512,3))
 # c = torch.ones((1,77,768))
-o = model(x,c)
-print(o)
+# o = model(x,c)
+# print(o)
 
 # Misc
 # dataset = MyDataset('kin')

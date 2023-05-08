@@ -9,7 +9,7 @@ from cldm.model import create_model, load_state_dict
 
 
 # Configs
-resume_path = './models/control_v15_cross_ini.ckpt'
+resume_path = './models/style-context.ckpt'
 batch_size = 4
 logger_freq = 300
 learning_rate = 1e-5
@@ -26,14 +26,14 @@ model.only_mid_control = only_mid_control
 
 
 # Misc
-dataset = MyDataset('kin')
-logger = ImageLogger(batch_frequency=logger_freq, name='kin_cross_2')
-wandb_logger = WandbLogger(name='kin_cross_2', project="ControlNet")
-tbl = TensorBoardLogger(save_dir='ControlNet', name='kin_cross_2')
+dataset = MyDataset('kin_hed2')
+logger = ImageLogger(batch_frequency=logger_freq, name='kin_hed_cross_style_1')
+# wandb_logger = WandbLogger(name='kin_hed_cross_2', project="ControlNet")
+# tbl = TensorBoardLogger(save_dir='ControlNet', name='kin_hed_cross_2')
 
 dataloader = DataLoader(dataset, num_workers=64, batch_size=batch_size, shuffle=True)
 
-trainer = pl.Trainer(gpus=1, precision=32, callbacks=[logger], logger=[wandb_logger, tbl])
+trainer = pl.Trainer(gpus=1, precision=32, callbacks=[logger]) #, logger=[wandb_logger, tbl])
 
 
 

@@ -13,11 +13,15 @@ from annotator.util import resize_image, HWC3
 from annotator.canny import CannyDetector
 from cldm.model import create_model, load_state_dict
 from cldm.ddim_hacked import DDIMSampler
+from annotator.hed import HEDdetector
+
 
 
 apply_canny = CannyDetector()
+apply_hed = HEDdetector()
+
 model = create_model('./models/cldm_v15_cross.yaml').cpu()
-model.load_state_dict(load_state_dict('./ControlNet_kin_cross_2/sjlytpz5_0/checkpoints/epoch=20-step=272705.ckpt', location='cuda'))
+model.load_state_dict(load_state_dict('./ControlNet_kin_hed_cross_2/bm0hd5dp_1/checkpoints/epoch=1-step=182375.ckpt', location='cuda'))
 model = model.cuda()
 ddim_sampler = DDIMSampler(model)
 
@@ -26,12 +30,15 @@ def process(input_image, style_image, prompt, a_prompt, n_prompt, num_samples, i
     with torch.no_grad():
         img = resize_image(HWC3(input_image), image_resolution)
         style_image = resize_image(HWC3(style_image), image_resolution)
+
+        print(style_image)
+
         H, W, C = img.shape
 
-        detected_map = apply_canny(img, low_threshold, high_threshold)
+        # detected_map = apply_canny(img, low_threshold, high_threshold)
+        detected_map = apply_hed(img)
         detected_map = HWC3(detected_map)
 
-        # get encoding here from style encoder
 
         control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
         control = torch.stack([control for _ in range(num_samples)], dim=0)
@@ -44,8 +51,9 @@ def process(input_image, style_image, prompt, a_prompt, n_prompt, num_samples, i
         if config.save_memory:
             model.low_vram_shift(is_diffusing=False)
 
+        # get encoding here from style encoder
         c_style = model.style_encoder([style_image] * num_samples)
-        uc_style = torch.zeros_like(c_style) # c_style
+        uc_style =  c_style # torch.zeros_like(c_style) #
 
         cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning([prompt + ', ' + a_prompt] * num_samples)], "c_style": [c_style] }
         un_cond = {"c_concat": None if guess_mode else [control], "c_crossattn": [model.get_learned_conditioning([n_prompt] * num_samples)], "c_style": [uc_style] }
