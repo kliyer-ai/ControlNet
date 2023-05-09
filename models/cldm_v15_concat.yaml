@@ -9,6 +9,7 @@ model:
     first_stage_key: "jpg"
     cond_stage_key: "txt"
     control_key: "hint"
+    style_key: "style"
     image_size: 64
     channels: 4
     cond_stage_trainable: false
@@ -23,7 +24,8 @@ model:
       params:
         image_size: 32 # unused
         in_channels: 4
-        hint_channels: 6
+        hint_channels: 3
+        style_channels: 4
         model_channels: 320
         attention_resolutions: [ 4, 2, 1 ]
         num_res_blocks: 2
@@ -34,6 +36,7 @@ model:
         context_dim: 768
         use_checkpoint: True
         legacy: False
+        add_style: True
 
     unet_config:
       target: cldm.cldm.ControlledUnetModel

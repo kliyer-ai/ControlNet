@@ -230,13 +230,14 @@ class FrozenClipImageEmbedder(AbstractEncoder):
         inputs = self.processor(images=images, return_tensors="pt")
         imgs = inputs['pixel_values'].to(self.device)
         outputs = self.model(imgs)
-        if self.layer == "last":
-            z = outputs.last_hidden_state
-        elif self.layer == "pooled":
-            z = outputs.pooler_output[:, None, :]
-        else:
-            z = outputs.hidden_states[self.layer_idx]
-        return z
+        return outputs
+        # if self.layer == "last":
+        #     z = outputs.last_hidden_state
+        # elif self.layer == "pooled":
+        #     z = outputs.pooler_output[:, None, :]
+        # else:
+        #     z = outputs.hidden_states[self.layer_idx]
+        # return z
 
     def encode(self, image):
         return self(image)

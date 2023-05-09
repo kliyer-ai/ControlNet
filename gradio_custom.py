@@ -52,11 +52,12 @@ def process(input_image, style_image, prompt, a_prompt, n_prompt, num_samples, i
             model.low_vram_shift(is_diffusing=False)
 
         # get encoding here from style encoder
-        c_style = model.style_encoder([style_image] * num_samples)
+        style = model.style_encoder([style_image] * num_samples)
+        c_style = style.last_hidden_state
         uc_style =  c_style # torch.zeros_like(c_style) #
 
-        cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning([prompt + ', ' + a_prompt] * num_samples)], "c_style": [c_style] }
-        un_cond = {"c_concat": None if guess_mode else [control], "c_crossattn": [model.get_learned_conditioning([n_prompt] * num_samples)], "c_style": [uc_style] }
+        cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning([prompt + ', ' + a_prompt] * num_samples)], "c_style": [c_style], "c_embed": [None] }
+        un_cond = {"c_concat": None if guess_mode else [control], "c_crossattn": [model.get_learned_conditioning([n_prompt] * num_samples)], "c_style": [uc_style], "c_embed": [None]  }
         shape = (4, H // 8, W // 8)
 
         if config.save_memory:

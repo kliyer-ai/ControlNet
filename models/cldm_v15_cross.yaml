@@ -13,7 +13,6 @@ model:
     image_size: 64
     channels: 4
     cond_stage_trainable: false
-    style_stage_trainable: false
     conditioning_key: crossattn
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
@@ -36,6 +35,7 @@ model:
         context_dim: 768
         use_checkpoint: True
         legacy: False
+        style_context: False
 
     unet_config:
       target: cldm.cldm.ControlledUnetModel
@@ -82,3 +82,6 @@ model:
 
     style_stage_config:
       target: ldm.modules.encoders.modules.FrozenClipImageEmbedder
+      style_stage_trainable: false
+
+

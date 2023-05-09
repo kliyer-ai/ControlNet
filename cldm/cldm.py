@@ -296,7 +296,7 @@ class ControlNet(nn.Module):
     def make_zero_conv(self, channels):
         return TimestepEmbedSequential(zero_module(conv_nd(self.dims, channels, channels, 1, padding=0)))
 
-    def forward(self, x, hint, timesteps, context, style_img=None, style_embed=None **kwargs):
+    def forward(self, x, hint, timesteps, context, style_img=None, style_embed=None, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
@@ -418,8 +418,7 @@ class ControlLDM(LatentDiffusion):
 
         cond_txt = torch.cat(cond['c_crossattn'], 1)
         control_txt = torch.cat(cond['c_style'], 1) if self.has_style_stage else cond_txt
-        style = None if self.has_style_stage else torch.cat(cond['c_style'], 1)
-        c_embed = None if self.has_style_stage else torch.cat(cond['c_embed'], 1)
+        c_embed = None #if self.has_style_stage else torch.cat(cond['c_embed'], 1)
         print('check if below is None')
         print(torch.cat(cond['c_style'], 1))
 
@@ -428,7 +427,7 @@ class ControlLDM(LatentDiffusion):
         if cond['c_concat'] is None:
             eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=None, only_mid_control=self.only_mid_control)
         else:
-            control = self.control_model(x=x_noisy, hint=torch.cat(cond['c_concat'], 1), timesteps=t, context=control_txt, style_img=style, style_embed=c_embed)
+            control = self.control_model(x=x_noisy, hint=torch.cat(cond['c_concat'], 1), timesteps=t, context=control_txt, style_embed=c_embed)
             control = [c * scale for c, scale in zip(control, self.control_scales)]
             eps = diffusion_model(x=x_noisy, timesteps=t, context=cond_txt, control=control, only_mid_control=self.only_mid_control)
 
