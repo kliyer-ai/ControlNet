@@ -27,15 +27,20 @@ model.only_mid_control = only_mid_control
 
 # Misc
 dataset = MyDataset('kin_hed2')
+validation_set = MyDataset('kin_hed_val')
+
+
 logger = ImageLogger(batch_frequency=logger_freq, name='kin_hed_cross_style_1')
 # wandb_logger = WandbLogger(name='kin_hed_cross_2', project="ControlNet")
 # tbl = TensorBoardLogger(save_dir='ControlNet', name='kin_hed_cross_2')
 
 dataloader = DataLoader(dataset, num_workers=64, batch_size=batch_size, shuffle=True)
+validation_loader = DataLoader(validation_set, num_workers=64, batch_size=batch_size, shuffle=True)
+
 
 trainer = pl.Trainer(gpus=1, precision=32, callbacks=[logger]) #, logger=[wandb_logger, tbl])
 
 
 
 # Train!
-trainer.fit(model, dataloader)
+trainer.fit(model, dataloader, validation_loader)

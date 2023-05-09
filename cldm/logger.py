@@ -46,51 +46,62 @@ class ImageLogger(Callback):
 
     def log_img(self, pl_module, batch, batch_idx, split="train"):
         check_idx = batch_idx  # if self.log_on_batch_idx else pl_module.global_step
-        if (self.check_frequency(check_idx) and  # batch_idx % self.batch_freq == 0
-                hasattr(pl_module, "log_images") and
-                callable(pl_module.log_images) and
+        if not (self.check_frequency(check_idx, split) or  # batch_idx % self.batch_freq == 0
+                hasattr(pl_module, "log_images") or
+                callable(pl_module.log_images) or
                 self.max_images > 0):
-            logger = type(pl_module.logger)
+            return
 
-            is_train = pl_module.training
-            if is_train:
-                pl_module.eval()
 
-            with torch.no_grad():
-                images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
+        logger = type(pl_module.logger)
 
-            # images is a dict
-            # so k is key
-            for k in images:
-                N = min(images[k].shape[0], self.max_images)
-                images[k] = images[k][:N]
+        is_train = pl_module.training
+        if is_train:
+            pl_module.eval()
 
-                # additions Nick
-                _, channel, _, _ = images[k].shape
-                if(channel > 3):
-                    images[k] = images[k][:, 0:3, :, :]
-                if(channel == 1):
-                    images[k] = torch.cat([images[k],images[k],images[k]], axis=1)
-                print(images[k].shape)
-                # ======================
+        with torch.no_grad():
+            images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
 
-                if isinstance(images[k], torch.Tensor):
-                    images[k] = images[k].detach().cpu()
-                    if self.clamp:
-                        images[k] = torch.clamp(images[k], -1., 1.)
+        # images is a dict
+        # so k is key
+        for k in images:
+            print(k)
+            N = min(images[k].shape[0], self.max_images)
+            images[k] = images[k][:N]
 
-            # pl_module.logger.save_dir
-            # for somem reason this is None when using wandb logger
-            # print(pl_module.logger.save_dir)
-            self.log_local('./', split, images,
-                           pl_module.global_step, pl_module.current_epoch, batch_idx)
+            # additions Nick
+            _, channel, _, _ = images[k].shape
+            if(channel > 3):
+                images[k] = images[k][:, 0:3, :, :]
+            if(channel == 1):
+                images[k] = torch.cat([images[k],images[k],images[k]], axis=1)
+            # ======================
 
-            if is_train:
-                pl_module.train()
+            if isinstance(images[k], torch.Tensor):
+                images[k] = images[k].detach().cpu()
+                if self.clamp:
+                    images[k] = torch.clamp(images[k], -1., 1.)
 
-    def check_frequency(self, check_idx):
+        # pl_module.logger.save_dir
+        # for somem reason this is None when using wandb logger
+        # print(pl_module.logger.save_dir)
+        self.log_local('./', split, images,
+                        pl_module.global_step, pl_module.current_epoch, batch_idx)
+
+        if is_train:
+            pl_module.train()
+
+    def check_frequency(self, check_idx, split='train'):
+
+        if split == 'validation':
+            return check_idx % 100 == 0
+
         return check_idx % self.batch_freq == 0
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
         if not self.disabled:
             self.log_img(pl_module, batch, batch_idx, split="train")
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+        if not self.disabled:
+            self.log_img(pl_module, batch, batch_idx, split="validation")
