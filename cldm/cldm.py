@@ -77,7 +77,7 @@ class ControlNet(nn.Module):
             context_dim=None,  # custom transformer support
             n_embed=None,  # custom support for prediction of discrete ids into codebook of first stage vq model
             legacy=True,
-            style_context=False,
+            use_style_embed=False,
             disable_self_attentions=None,
             num_attention_blocks=None,
             disable_middle_self_attn=False,
@@ -106,7 +106,6 @@ class ControlNet(nn.Module):
         self.image_size = image_size
         self.in_channels = in_channels
         self.model_channels = model_channels
-        self.style_context = style_context
         if isinstance(num_res_blocks, int):
             self.num_res_blocks = len(channel_mult) * [num_res_blocks]
         else:
@@ -143,7 +142,8 @@ class ControlNet(nn.Module):
             linear(time_embed_dim, time_embed_dim),
         )
 
-        if style_context:
+        self.use_style_embed = use_style_embed
+        if use_style_embed:
             self.style_embed = nn.Sequential(
                 linear(context_dim, time_embed_dim),
                 nn.SiLU(),
@@ -296,14 +296,13 @@ class ControlNet(nn.Module):
     def make_zero_conv(self, channels):
         return TimestepEmbedSequential(zero_module(conv_nd(self.dims, channels, channels, 1, padding=0)))
 
+    # style img is actually not used anymore
     def forward(self, x, hint, timesteps, context, style_img=None, style_embed=None, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
-        if self.style_context:
-            context, style_embed = context.last_hidden_state , context.pooler_output 
+        if self.use_style_embed:
             style_embed = self.style_embed(style_embed)
-
             emb = emb + style_embed
 
         guided_hint = self.input_hint_block(hint, emb, context)
@@ -328,13 +327,14 @@ class ControlNet(nn.Module):
 
 class ControlLDM(LatentDiffusion):
 
-    def __init__(self, control_stage_config, control_key, style_key, only_mid_control, style_stage_config=None, *args, **kwargs):
+    def __init__(self, control_stage_config, control_key, only_mid_control, style_stage_config=None, style_key=None, add_sd_context=False, num_controls=1, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control_model = instantiate_from_config(control_stage_config)
         self.control_key = control_key
         self.style_key = style_key
         self.only_mid_control = only_mid_control
         self.control_scales = [1.0] * 13
+        self.add_sd_context = add_sd_context
 
         self.has_style_stage = False
         if style_stage_config is not None:
@@ -379,16 +379,17 @@ class ControlLDM(LatentDiffusion):
 
         style = None
         embed = None
-        if not self.has_style_stage:
-            style, _ = super().get_input(batch, self.style_key, *args, **kwargs)
-        else:
-            style = batch[self.style_key]
-            if bs is not None:
-                style = style[:bs]
+        if self.style_key is not None:
+            if not self.has_style_stage:
+                style, _ = super().get_input(batch, self.style_key, *args, **kwargs)
+            else:
+                style = batch[self.style_key]
+                if bs is not None:
+                    style = style[:bs]
 
-            style = style.to(self.device)
-            style = self.style_encoder(style)
-            style, embed = style.last_hidden_state , style.pooler_output  
+                style = style.to(self.device)
+                style = self.style_encoder(style)
+                style, embed = style.last_hidden_state , style.pooler_output  
 
         # new keys won't get encoded here
         control = batch[self.control_key]
@@ -398,29 +399,28 @@ class ControlLDM(LatentDiffusion):
         control = einops.rearrange(control, 'b h w c -> b c h w')
         control = control.to(memory_format=torch.contiguous_format).float()
 
-        # if not hasattr(self, 'style_key') or self.style_key not in batch:
-        #     return x, dict(c_crossattn=[c], c_concat=[control], c_style=None)
+        conditioning = dict(c_crossattn=[c], c_concat=[control])
 
-        # I guess here would also be good place to get the clip embedding for the img
-       
-        # style = style.to(self.device)
-        # style = einops.rearrange(style, 'b h w c -> b c h w')
-        # style = style.to(memory_format=torch.contiguous_format).float()
+        if style is not None:
+            conditioning["c_style"] = [style]
 
-        return x, dict(c_crossattn=[c], c_concat=[control], c_style=[style], c_embed=[embed])
+        if embed is not None:
+            conditioning["c_embed"] = [embed]
+
+        return x, conditioning
         
 
     def apply_model(self, x_noisy, t, cond, *args, **kwargs):
         assert isinstance(cond, dict)
         diffusion_model = self.model.diffusion_model
-        # print('apply model')
-        # print(cond)p
 
         cond_txt = torch.cat(cond['c_crossattn'], 1)
         control_txt = torch.cat(cond['c_style'], 1) if self.has_style_stage else cond_txt
-        c_embed = None #if self.has_style_stage else torch.cat(cond['c_embed'], 1)
-        print('check if below is None')
-        print(torch.cat(cond['c_style'], 1))
+        c_embed = torch.cat(cond['c_embed'], 1) if self.has_style_stage else None
+
+        if self.add_sd_context:
+            # use img embedding for both SD and ControlNet
+            cond_txt=control_txt
 
         # here I could maybe add my own cross attention for images
 
@@ -460,11 +460,30 @@ class ControlLDM(LatentDiffusion):
         # fix below lol
         # it's not only used for displaying  but also for sampling hehe
 
-        style_img = batch[self.style_key][:N]
-        style_img = einops.rearrange(style_img, 'b h w c -> b c h w')
+        if self.style_key:
+            style_img = batch[self.style_key][:N]
+            style_img = einops.rearrange(style_img, 'b h w c -> b c h w')
+            if self.has_style_stage:
+                # style image is in [0,255] as that's what the clip image embedder expects
+                # so we normalize it to what the image logger expects
+                style_img = style_img / 127.5 - 1.0
+            log["style"] = style_img
+        
 
 
-        c_cat, c, c_style, c_embed  = c["c_concat"][0][:N], c["c_crossattn"][0][:N], c["c_style"][0][:N], c["c_embed"][0][:N]
+        c_cat, c_crossattn, c_style, c_embed  = c["c_concat"][0][:N], c["c_crossattn"][0][:N], None, None
+
+        c_full = {"c_concat": [c_cat], "c_crossattn": [c_crossattn]}
+
+        if "c_style" in c:
+            c_style = c["c_style"][0][:N]
+            c_full["c_style"] = [c_style]
+
+
+        if "c_embed" in c:
+            c_embed = c["c_embed"][0][:N]
+            c_full["c_embed"] = [c_embed]
+
 
         N = min(z.shape[0], N)
         n_row = min(z.shape[0], n_row)
@@ -473,19 +492,7 @@ class ControlLDM(LatentDiffusion):
         
         log["conditioning"] = log_txt_as_img((512, 512), batch[self.cond_stage_key], size=16)
 
-        c_full = {"c_concat": [c_cat], "c_crossattn": [c]}
-
-        if self.has_style_stage:
-            style_img = style_img / 127.5 - 1.0
-
-        # c_style = self.decode_first_stage(c_style)
-        log["style"] = style_img
-        c_full["c_style"] = [c_style]
-        c_full["c_embed"] = [c_embed]
-        uc_style = c_style # torch.zeros_like(c_style) # self.get_unconditional_conditioning_style(N)
-        uc_embed = c_embed
-
-        if plot_diffusion_rows:
+        if plot_diffusion_rows: # false
             # get diffusion row
             diffusion_row = list()
             z_start = z[:n_row]
@@ -503,7 +510,7 @@ class ControlLDM(LatentDiffusion):
             diffusion_grid = make_grid(diffusion_grid, nrow=diffusion_row.shape[0])
             log["diffusion_row"] = diffusion_grid
 
-        if sample:
+        if sample: # false
             # get denoise row
             samples, z_denoise_row = self.sample_log(cond=c_full,
                                                      batch_size=N, ddim=use_ddim,
@@ -514,13 +521,24 @@ class ControlLDM(LatentDiffusion):
                 denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
                 log["denoise_row"] = denoise_grid
 
-        if unconditional_guidance_scale > 1.0:
+        if unconditional_guidance_scale > 1.0: # true, this is being used
             uc_cross = self.get_unconditional_conditioning(N)
+
+            # in the controlnet repo they do it like this
             uc_cat = c_cat  # torch.zeros_like(c_cat)
             uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross]}
 
-            uc_full["c_style"] = [uc_style]
-            uc_full["c_embed"] = [uc_embed]
+            uc_style = c_style # torch.zeros_like(c_style) # self.get_unconditional_conditioning_style(N)
+            uc_embed = c_embed
+
+            # so we also don't to proper unconditioning for style and embed
+            if uc_style is not None:
+                uc_full["c_style"] = [uc_style]
+
+            if uc_embed is not None:
+                uc_full["c_embed"] = [uc_embed]
+
+            print(unconditional_guidance_scale)
 
             samples_cfg, _ = self.sample_log(cond=c_full,
                                              batch_size=N, ddim=use_ddim,
