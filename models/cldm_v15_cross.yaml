@@ -1,6 +1,8 @@
 model:
   target: cldm.cldm.ControlLDM
   params:
+    control_dropout: 0.25
+    style_dropout: 0.25
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
@@ -18,6 +20,7 @@ model:
     scale_factor: 0.18215
     use_ema: False
     only_mid_control: False
+    add_sd_context: False
 
     control_stage_config:
       target: cldm.cldm.ControlNet
@@ -35,7 +38,7 @@ model:
         context_dim: 768
         use_checkpoint: True
         legacy: False
-        style_context: False
+        use_style_embed: False
 
     unet_config:
       target: cldm.cldm.ControlledUnetModel
