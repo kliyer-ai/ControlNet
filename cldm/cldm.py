@@ -474,6 +474,7 @@ class ControlLDM(LatentDiffusion):
                 style, embed = style.last_hidden_state, style.pooler_output
 
                 if dropout_style:
+                    # if used, could potentially add noise here similar to unclip
                     embed = (
                         torch.bernoulli(
                             (1.0 - self.style_dropout)
@@ -483,6 +484,9 @@ class ControlLDM(LatentDiffusion):
                     )
                     # check whether this should really just be 0
                     # or clip img embedding of "neutral" image
+
+                    # maybe noise here as well? maybe bit different though because
+                    # it's unpooled embedding
                     style = (
                         torch.bernoulli(
                             (1.0 - self.style_dropout)
@@ -646,11 +650,11 @@ class ControlLDM(LatentDiffusion):
 
         N = min(z.shape[0], N)
         n_row = min(z.shape[0], n_row)
-        log["reconstruction"] = self.decode_first_stage(z)
-        log["control"] = c_cat * 2.0 - 1.0
         log["conditioning"] = log_txt_as_img(
             (512, 512), batch[self.cond_stage_key], size=16
         )
+        log["control"] = c_cat * 2.0 - 1.0
+        log["reconstruction"] = self.decode_first_stage(z)
 
         samples_cfg, _ = self.sample_log(
             cond=c_full,
