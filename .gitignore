@@ -4,6 +4,11 @@ training/
 lightning_logs/
 image_log/
 data/
+wandb/
+ControlNet*/
+*.jpg
+*.png
+*.tmp
 
 *.pth
 *.pt
@@ -12,6 +17,8 @@ data/
 
 gradio_pose2image_private.py
 gradio_canny2image_private.py
+
+first_train_logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
