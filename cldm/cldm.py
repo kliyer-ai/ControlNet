@@ -327,7 +327,7 @@ class ControlNet(nn.Module):
 
 class ControlLDM(LatentDiffusion):
 
-    def __init__(self, control_stage_config, control_key, only_mid_control, style_stage_config=None, style_key=None, add_sd_context=False, num_controls=1, *args, **kwargs):
+    def __init__(self, control_stage_config, control_key, only_mid_control, style_stage_config=None, style_key=None, add_sd_context=False, control_dropout=0, style_dropout=0, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control_model = instantiate_from_config(control_stage_config)
         self.control_key = control_key
@@ -335,6 +335,8 @@ class ControlLDM(LatentDiffusion):
         self.only_mid_control = only_mid_control
         self.control_scales = [1.0] * 13
         self.add_sd_context = add_sd_context
+        self.control_dropout = control_dropout
+        self.style_dropout = style_dropout
 
         self.has_style_stage = False
         if style_stage_config is not None:
@@ -374,7 +376,7 @@ class ControlLDM(LatentDiffusion):
             self.style_encoder = model
 
     @torch.no_grad()
-    def get_input(self, batch, k, bs=None, *args, **kwargs):
+    def get_input(self, batch, k, bs=None, dropout_control=True, dropout_style=True, *args, **kwargs):
         x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs)
 
         style = None
@@ -389,15 +391,43 @@ class ControlLDM(LatentDiffusion):
 
                 style = style.to(self.device)
                 style = self.style_encoder(style)
-                style, embed = style.last_hidden_state , style.pooler_output  
+                style, embed = style.last_hidden_state, style.pooler_output
 
-        # new keys won't get encoded here
+                if dropout_style:
+                    embed = (
+                        torch.bernoulli(
+                            (1.0 - self.style_dropout)
+                            * torch.ones(embed.shape[0], device=embed.device)[:, None]
+                        )
+                        * embed
+                    )
+                    # check whether this should really just be 0
+                    # or clip img embedding of "neutral" image
+                    style = (
+                        torch.bernoulli(
+                            (1.0 - self.style_dropout)
+                            * torch.ones(style.shape[0], device=style.device)[:, None, None]
+                        )
+                        * style
+                    )
+
         control = batch[self.control_key]
         if bs is not None:
             control = control[:bs]
         control = control.to(self.device)
         control = einops.rearrange(control, 'b h w c -> b c h w')
         control = control.to(memory_format=torch.contiguous_format).float()
+
+        if dropout_control:
+            control = (
+                torch.bernoulli(
+                    (1.0 - self.control_dropout)
+                    * torch.ones(control.shape[0], device=control.device)[
+                        :, None, None, None
+                    ]
+                )
+                * control
+            )
 
         conditioning = dict(c_crossattn=[c], c_concat=[control])
 
@@ -420,7 +450,7 @@ class ControlLDM(LatentDiffusion):
 
         if self.add_sd_context:
             # use img embedding for both SD and ControlNet
-            cond_txt=control_txt
+            cond_txt = control_txt
 
         # here I could maybe add my own cross attention for images
 
@@ -454,7 +484,7 @@ class ControlLDM(LatentDiffusion):
         # in the cross attention case, there is no preprocessing because the model already does it
         # in the sum/concat case, it was normalized to be between -1 and 1
 
-        z, c = self.get_input(batch, self.first_stage_key, bs=N)
+        z, c = self.get_input(batch, self.first_stage_key, bs=N, dropout_control=False, dropout_style=False)
         # c_style, _ = self.get_input(batch, self.style_key, bs=N)
         
         # fix below lol
@@ -472,82 +502,38 @@ class ControlLDM(LatentDiffusion):
 
 
         c_cat, c_crossattn, c_style, c_embed  = c["c_concat"][0][:N], c["c_crossattn"][0][:N], None, None
-
         c_full = {"c_concat": [c_cat], "c_crossattn": [c_crossattn]}
+
+        uc_cross = self.get_unconditional_conditioning(N)
+        uc_cat = torch.zeros_like(c_cat)
+        uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross]}
 
         if "c_style" in c:
             c_style = c["c_style"][0][:N]
             c_full["c_style"] = [c_style]
-
+            uc_style = torch.zeros_like(c_style)
+            uc_full["c_style"] = [uc_style]
 
         if "c_embed" in c:
             c_embed = c["c_embed"][0][:N]
             c_full["c_embed"] = [c_embed]
-
+            uc_embed = torch.zeros_like(c_embed)
+            uc_full["c_embed"] = [uc_embed]
 
         N = min(z.shape[0], N)
         n_row = min(z.shape[0], n_row)
         log["reconstruction"] = self.decode_first_stage(z)
         log["control"] = c_cat * 2.0 - 1.0
-        
         log["conditioning"] = log_txt_as_img((512, 512), batch[self.cond_stage_key], size=16)
 
-        if plot_diffusion_rows: # false
-            # get diffusion row
-            diffusion_row = list()
-            z_start = z[:n_row]
-            for t in range(self.num_timesteps):
-                if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
-                    t = repeat(torch.tensor([t]), '1 -> b', b=n_row)
-                    t = t.to(self.device).long()
-                    noise = torch.randn_like(z_start)
-                    z_noisy = self.q_sample(x_start=z_start, t=t, noise=noise)
-                    diffusion_row.append(self.decode_first_stage(z_noisy))
-
-            diffusion_row = torch.stack(diffusion_row)  # n_log_step, n_row, C, H, W
-            diffusion_grid = rearrange(diffusion_row, 'n b c h w -> b n c h w')
-            diffusion_grid = rearrange(diffusion_grid, 'b n c h w -> (b n) c h w')
-            diffusion_grid = make_grid(diffusion_grid, nrow=diffusion_row.shape[0])
-            log["diffusion_row"] = diffusion_grid
-
-        if sample: # false
-            # get denoise row
-            samples, z_denoise_row = self.sample_log(cond=c_full,
-                                                     batch_size=N, ddim=use_ddim,
-                                                     ddim_steps=ddim_steps, eta=ddim_eta)
-            x_samples = self.decode_first_stage(samples)
-            log["samples"] = x_samples
-            if plot_denoise_rows:
-                denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
-                log["denoise_row"] = denoise_grid
-
-        if unconditional_guidance_scale > 1.0: # true, this is being used
-            uc_cross = self.get_unconditional_conditioning(N)
-
-            # in the controlnet repo they do it like this
-            uc_cat = c_cat  # torch.zeros_like(c_cat)
-            uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross]}
-
-            uc_style = c_style # torch.zeros_like(c_style) # self.get_unconditional_conditioning_style(N)
-            uc_embed = c_embed
-
-            # so we also don't to proper unconditioning for style and embed
-            if uc_style is not None:
-                uc_full["c_style"] = [uc_style]
-
-            if uc_embed is not None:
-                uc_full["c_embed"] = [uc_embed]
-
-            print(unconditional_guidance_scale)
-
-            samples_cfg, _ = self.sample_log(cond=c_full,
-                                             batch_size=N, ddim=use_ddim,
-                                             ddim_steps=ddim_steps, eta=ddim_eta,
-                                             unconditional_guidance_scale=unconditional_guidance_scale,
-                                             unconditional_conditioning=uc_full,
-                                             )
-            x_samples_cfg = self.decode_first_stage(samples_cfg)
-            log[f"samples_cfg_scale_{unconditional_guidance_scale:.2f}"] = x_samples_cfg
+        samples_cfg, _ = self.sample_log(cond=c_full,
+                                            batch_size=N, ddim=use_ddim,
+                                            ddim_steps=ddim_steps, eta=ddim_eta,
+                                            unconditional_guidance_scale=unconditional_guidance_scale,
+                                            unconditional_conditioning=uc_full,
+                                            )
+        x_samples_cfg = self.decode_first_stage(samples_cfg)
+        log[f"samples_cfg_scale_{unconditional_guidance_scale:.2f}"] = x_samples_cfg
 
         return log
 
