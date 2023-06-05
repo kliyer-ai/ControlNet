@@ -399,6 +399,7 @@ class ControlLDM(LatentDiffusion):
         control_dropout=0,
         style_dropout=0,
         guidance_scale=7,
+        concat_encode_channels=None,
         *args,
         **kwargs,
     ):
@@ -412,6 +413,7 @@ class ControlLDM(LatentDiffusion):
         self.control_dropout = control_dropout
         self.style_dropout = style_dropout
         self.guidance_scale = guidance_scale
+        self.concat_encode_channels = concat_encode_channels
 
         self.has_style_stage = False
         if style_stage_config is not None:
@@ -507,6 +509,13 @@ class ControlLDM(LatentDiffusion):
         control = control.to(self.device)
         control = einops.rearrange(control, "b h w c -> b c h w")
         control = control.to(memory_format=torch.contiguous_format).float()
+
+        if self.concat_encode_channels is not None:
+            encoder_posterior = self.encode_first_stage(
+                control[:, self.concat_encode_channels :]
+            )
+            z_style = self.get_first_stage_encoding(encoder_posterior).detach()
+            control = torch.cat([control[:, : self.concat_encode_channels], z_style], 0)
 
         if dropout_control:
             control = (
