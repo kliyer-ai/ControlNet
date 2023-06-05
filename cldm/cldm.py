@@ -366,6 +366,8 @@ class ControlNet(nn.Module):
             style_embed = self.style_embed(style_embed)
             emb = emb + style_embed
 
+        # we can either concat all local conditoins and feed through one block here
+        # or do one block per condition and add it up
         guided_hint = self.input_hint_block(hint, emb, context)
 
         outs = []
@@ -396,6 +398,7 @@ class ControlLDM(LatentDiffusion):
         add_sd_context=False,
         control_dropout=0,
         style_dropout=0,
+        guidance_scale=7,
         *args,
         **kwargs,
     ):
@@ -408,6 +411,7 @@ class ControlLDM(LatentDiffusion):
         self.add_sd_context = add_sd_context
         self.control_dropout = control_dropout
         self.style_dropout = style_dropout
+        self.guidance_scale = guidance_scale
 
         self.has_style_stage = False
         if style_stage_config is not None:
@@ -598,6 +602,8 @@ class ControlLDM(LatentDiffusion):
     ):
         use_ddim = ddim_steps is not None
 
+        unconditional_guidance_scale = self.guidance_scale
+
         log = dict()
         # we can take the style from batch but we need to know how it was preprocessed
         # in the cross attention case, there is no preprocessing because the model already does it
@@ -622,6 +628,11 @@ class ControlLDM(LatentDiffusion):
                 # style image is in [0,255] as that's what the clip image embedder expects
                 # so we normalize it to what the image logger expects
                 style_img = style_img / 127.5 - 1.0
+            log["style"] = style_img
+
+        if "source" in batch:
+            style_img = batch["source"][:N]
+            style_img = einops.rearrange(style_img, "b h w c -> b c h w")
             log["style"] = style_img
 
         c_cat, c_crossattn, c_style, c_embed = (
