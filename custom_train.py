@@ -3,20 +3,20 @@ from share import *
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
 from torch.utils.data import DataLoader
-from custom_dataset_cross import MyDataset
+from custom_dataset_concat import MyDataset
 from cldm.logger import ImageLogger
 from cldm.model import create_model, load_state_dict
 
 
 # Configs
 # resume_path = './models/control-base.ckpt'
-resume_path = "./models/control-style-context.ckpt"
-experiment_name = "kin_hed_dropout1"
-config_path = "./models/cldm_v15_cross.yaml"
+resume_path = "./models/control-concat-7.ckpt"
+experiment_name = "kin_hed_concat4"
+config_path = "./models/cldm_v15_concat.yaml"
 
 batch_size = 4
 logger_freq = 300
-learning_rate = 1e-4  # higher
+learning_rate = 1e-5  # higher
 sd_locked = True
 only_mid_control = False
 

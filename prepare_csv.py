@@ -28,6 +28,27 @@ gap_ms = 500
 gap_f = 6
 
 
+def extractImages(pathIn, pathOut):
+    count = 0
+    vidcap = cv2.VideoCapture(pathIn)
+    success, image = vidcap.read()
+    success = True
+    while success:
+        # vidcap.set(cv2.CAP_PROP_POS_MSEC,(count*1000))
+        success, image = vidcap.read()
+        print("Read a new frame: ", success)
+        cv2.imwrite(pathOut + "\\frame%d.png" % count, image)  # save frame as JPEG file
+        count = count + 1
+
+
+def extract_start_end_imgs(pathIn):
+    vidcap = cv2.VideoCapture(pathIn)
+    _, start = vidcap.read()
+    vidcap.set(cv2.CAP_PROP_POS_MSEC, (1 * 1000))
+    _, end = vidcap.read()
+    return start, end
+
+
 def center_crop_img(img):
     y, x, _ = img.shape
     k = min(y, x)
