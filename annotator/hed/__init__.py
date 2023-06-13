@@ -97,13 +97,13 @@ class HEDdetector:
         self.netNetwork.load_state_dict(torch.load(modelpath))
 
     def __call__(self, input_image):
-        H, W, C = input_image.shape
         with torch.no_grad():
             image_hed = torch.from_numpy(input_image.copy()).float().cuda()
             if input_image.ndim == 3:
                 image_hed = rearrange(image_hed, "h w c -> 1 h w c")
             if image_hed.shape[3] == 3:
                 image_hed = rearrange(image_hed, "b h w c -> b c h w")
+            B, C, H, W = image_hed.shape
             edges = self.netNetwork(image_hed)
             edges = [e.detach().cpu().numpy().astype(np.float32)[0, 0] for e in edges]
             edges = [
