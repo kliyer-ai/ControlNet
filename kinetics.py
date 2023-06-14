@@ -6,11 +6,14 @@ from torchvision.io import read_video, read_video_timestamps
 import torchvision.transforms as T
 import torch
 from einops import rearrange
+from annotator.hed import TorchHEDdetector
 
 import json
 
 IWR_DATA_ROOT = "/export/compvis-nfs/group/datasets/kinetics-dataset/k700-2020"
 MVL_DATA_ROOT = "/export/group/datasets/kinetics-dataset/k700-2020"
+
+apply_hed = TorchHEDdetector()
 
 
 class PRNGMixin(object):
@@ -44,6 +47,7 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
         filter_file=None,
         flow_only=False,
         include_full_sequence=False,
+        include_hed=False,
     ):
         super().__init__()
         self.seq_time = sequence_time  # the time in seconds we want a sequence to have (-> we can get different amount of frames though)
@@ -53,6 +57,7 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
             exit()
 
         self.include_full_seq = include_full_sequence
+        self.include_hed = include_hed
 
         self.size = size
         self.random_crop = random_crop
@@ -149,6 +154,14 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
         video = rearrange(video, "t c h w -> t h w c")
         return video
 
+    def _inverse_preprocess(self, video):
+        if self.pixel_range == 1:  # pixels between 0 and 1
+            video = video * 255.0
+        else:  # pixels between -1 and 1
+            video = (video + 1) * 127.5
+
+        return video
+
     def sample_when_corrupt(self, idx, new=True):
         if new:
             self.invalid.add(idx)
@@ -178,14 +191,11 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
                 temp = np.random.randint(len(self.timestamps_start[oldidx]))
                 start = self.timestamps_start[oldidx][temp]  # in frames
                 end = self.timestamps_end[oldidx][temp]  # in frames
-                print(start, end)
 
                 if self.seq_length is not None:
                     end = min(end, start + self.seq_length)
                 elif self.seq_time is not None and self.seq_length is None:
                     end = min(end, start + np.ceil(self.seq_time * fps))
-
-                print("new end", end)
 
                 # we need to convert each frame to the corresponding second in the video (-1 because the end timestamp is exclusive [start:end] but read video not)
                 seq, _, _ = read_video(
@@ -277,6 +287,19 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
 
         if self.include_full_seq:
             example["sequence"] = seq
+
+        if self.include_hed:
+            # apply_hed needs imgs in [0, 255]
+            example["hed_start_frame"] = (
+                apply_hed(self._inverse_preprocess(example["start_frame"])) / 255.0
+            )
+            example["hed_intermediate_frame"] = (
+                apply_hed(self._inverse_preprocess(example["intermediate_frame"]))
+                / 255.0
+            )
+            example["hed_end_frame"] = (
+                apply_hed(self._inverse_preprocess(example["end_frame"])) / 255.0
+            )
 
         return example
 
