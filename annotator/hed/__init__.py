@@ -12,6 +12,8 @@ import numpy as np
 
 from einops import rearrange
 from annotator.util import annotator_ckpts_path
+import torchvision.transforms as T
+import torch
 
 
 class DoubleConvBlock(torch.nn.Module):
@@ -97,13 +99,11 @@ class HEDdetector:
         self.netNetwork.load_state_dict(torch.load(modelpath))
 
     def __call__(self, input_image):
+        assert input_image.ndim == 3
+        H, W, C = input_image.shape
         with torch.no_grad():
             image_hed = torch.from_numpy(input_image.copy()).float().cuda()
-            if input_image.ndim == 3:
-                image_hed = rearrange(image_hed, "h w c -> 1 h w c")
-            if image_hed.shape[3] == 3:
-                image_hed = rearrange(image_hed, "b h w c -> b c h w")
-            B, C, H, W = image_hed.shape
+            image_hed = rearrange(image_hed, "h w c -> 1 c h w")
             edges = self.netNetwork(image_hed)
             edges = [e.detach().cpu().numpy().astype(np.float32)[0, 0] for e in edges]
             edges = [
@@ -112,6 +112,43 @@ class HEDdetector:
             edges = np.stack(edges, axis=2)
             edge = 1 / (1 + np.exp(-np.mean(edges, axis=2).astype(np.float64)))
             edge = (edge * 255.0).clip(0, 255).astype(np.uint8)
+            return edge
+
+
+class TorchHEDdetector:
+    def __init__(self):
+        remote_model_path = "https://huggingface.co/lllyasviel/Annotators/resolve/main/ControlNetHED.pth"
+        modelpath = os.path.join(annotator_ckpts_path, "ControlNetHED.pth")
+        if not os.path.exists(modelpath):
+            from basicsr.utils.download_util import load_file_from_url
+
+            load_file_from_url(remote_model_path, model_dir=annotator_ckpts_path)
+        self.netNetwork = ControlNetHED_Apache2().float().eval()
+        self.netNetwork.load_state_dict(torch.load(modelpath))
+
+    # expects img in [0, 255]
+    def __call__(self, image_hed):
+        with torch.no_grad():
+            is_batched = True
+
+            if image_hed.ndim == 3:
+                image_hed = rearrange(image_hed, "h w c -> 1 h w c")
+                is_batched = False
+            if image_hed.shape[3] == 3:
+                image_hed = rearrange(image_hed, "b h w c -> b c h w")
+            B, C, H, W = image_hed.shape
+            resize = T.Resize((W, H), T.InterpolationMode.BICUBIC)
+            edges = self.netNetwork(image_hed)
+            edges = [e[:, 0] for e in edges]
+            edges = [resize(e) for e in edges]
+            edges = torch.stack(edges, axis=3)
+            edge = 1 / (1 + torch.exp(-torch.mean(edges, axis=3)))  # -> [b, h, w]
+            edge = (edge * 255.0).clip(0, 255).type(torch.uint8)
+            edge = edge[:, :, :, None].repeat_interleave(3, 3)  # -> [b, h, w, c]
+
+            if not is_batched:
+                edge = edge[0]
+
             return edge
 
 
