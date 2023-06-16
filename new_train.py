@@ -1,10 +1,15 @@
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+
+# from pytorch_lightning.loggers import WandbLogger, TensorBoardLogger
+# from custom_dataset_cross import MyDataModule
 from torch.utils.data import DataLoader
-from custom_dataset_concat import MyDataset
+
 from cldm.logger import ImageLogger
 from cldm.model import create_model, load_state_dict
-from kinetics import Kinetics700InterpolateTrain, Kinetics700InterpolateBase
+
+from kinetics import Kinetics700InterpolateBase
+
+# from pytorch_lightning import seed_everything
 
 
 # Configs
@@ -13,7 +18,7 @@ resume_path = "./models/control-concat.ckpt"
 experiment_name = "kin_hed_concat6"
 config_path = "./models/cldm_v15_concat.yaml"
 
-batch_size = 16
+batch_size = 8
 logger_freq = 300
 learning_rate = 1e-5
 sd_locked = True
@@ -21,6 +26,8 @@ only_mid_control = False
 
 
 def main():
+    # seed_everything(42)
+
     # First use cpu to load models. Pytorch Lightning will automatically move it to GPUs.
     model = create_model(config_path).cpu()
     model.load_state_dict(load_state_dict(resume_path, location="cpu"))
@@ -31,7 +38,6 @@ def main():
     seq_time = 0.5
     seq_length = None  # 15
 
-    # Misc
     dataset = Kinetics700InterpolateBase(
         sequence_time=seq_time,
         sequence_length=seq_length,
@@ -67,15 +73,15 @@ def main():
     # wandb_logger = WandbLogger(name='kin_hed_cross_2', project="ControlNet")
     # tbl = TensorBoardLogger(save_dir='ControlNet', name='kin_hed_cross_2')
 
-    dataloader = DataLoader(
-        dataset, num_workers=32, batch_size=batch_size, shuffle=True
+    train_loader = DataLoader(
+        dataset, num_workers=4, batch_size=batch_size, shuffle=True
     )
-    validation_loader = DataLoader(
-        validation_set, num_workers=32, batch_size=batch_size, shuffle=True
+    val_loader = DataLoader(
+        validation_set, num_workers=4, batch_size=batch_size, shuffle=True
     )
 
     trainer = pl.Trainer(
-        gpus=4,
+        gpus=1,
         precision=32,
         callbacks=[logger],
         limit_val_batches=1,
@@ -85,7 +91,7 @@ def main():
     )  # , logger=[wandb_logger, tbl])
 
     # Train!
-    trainer.fit(model, dataloader, validation_loader)
+    trainer.fit(model, train_loader, val_loader)
 
 
 if __name__ == "__main__":
