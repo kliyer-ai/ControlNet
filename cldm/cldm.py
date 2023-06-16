@@ -356,9 +356,7 @@ class ControlNet(nn.Module):
         )
 
     # style img is actually not used anymore
-    def forward(
-        self, x, hint, timesteps, context, style_img=None, style_embed=None, **kwargs
-    ):
+    def forward(self, x, hint, timesteps, context, style_embed=None, **kwargs):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
@@ -389,42 +387,200 @@ class ControlNet(nn.Module):
 
 class ControlLDM(LatentDiffusion):
     def __init__(
-        self,
-        control_stage_config,
-        control_key,
-        only_mid_control,
-        style_stage_config=None,
-        style_key=None,
-        add_sd_context=False,
-        control_dropout=0,
-        style_dropout=0,
-        guidance_scale=7,
-        concat_encode_channels=None,
-        *args,
-        **kwargs,
+        self, control_stage_config, control_key, only_mid_control, *args, **kwargs
     ):
         super().__init__(*args, **kwargs)
         self.control_model = instantiate_from_config(control_stage_config)
         self.control_key = control_key
-        self.style_key = style_key
         self.only_mid_control = only_mid_control
         self.control_scales = [1.0] * 13
-        self.add_sd_context = add_sd_context
+
+    @torch.no_grad()
+    def get_input(self, batch, k, bs=None, *args, **kwargs):
+        x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs)
+        control = batch[self.control_key]
+        if bs is not None:
+            control = control[:bs]
+        control = control.to(self.device)
+        control = einops.rearrange(control, "b h w c -> b c h w")
+        control = control.to(memory_format=torch.contiguous_format).float()
+        return x, dict(c_crossattn=[c], c_concat=[control])
+
+    def apply_model(self, x_noisy, t, cond, *args, **kwargs):
+        assert isinstance(cond, dict)
+        diffusion_model = self.model.diffusion_model
+
+        cond_txt = torch.cat(cond["c_crossattn"], 1)
+        control_txt = cond_txt
+        if "c_control_crossattn" in cond:
+            control_txt = torch.cat(cond["c_control_crossattn"], 1)
+
+        if cond["c_concat"] is None:
+            eps = diffusion_model(
+                x=x_noisy,
+                timesteps=t,
+                context=cond_txt,
+                control=None,
+                only_mid_control=self.only_mid_control,
+            )
+        else:
+            control = self.control_model(
+                x=x_noisy,
+                hint=torch.cat(cond["c_concat"], 1),
+                timesteps=t,
+                context=control_txt,
+            )
+            control = [c * scale for c, scale in zip(control, self.control_scales)]
+            eps = diffusion_model(
+                x=x_noisy,
+                timesteps=t,
+                context=cond_txt,
+                control=control,
+                only_mid_control=self.only_mid_control,
+            )
+
+        return eps
+
+    @torch.no_grad()
+    def get_unconditional_conditioning(self, N):
+        return self.get_learned_conditioning([""] * N)
+
+    @torch.no_grad()
+    def log_images(
+        self,
+        batch,
+        N=4,
+        n_row=2,
+        sample=False,
+        ddim_steps=50,
+        ddim_eta=0.0,
+        return_keys=None,
+        quantize_denoised=True,
+        inpaint=True,
+        plot_denoise_rows=False,
+        plot_progressive_rows=True,
+        plot_diffusion_rows=False,
+        unconditional_guidance_scale=9.0,
+        unconditional_guidance_label=None,
+        use_ema_scope=True,
+        **kwargs,
+    ):
+        use_ddim = ddim_steps is not None
+
+        log = dict()
+        z, c = self.get_input(batch, self.first_stage_key, bs=N)
+        c_cat, c = c["c_concat"][0][:N], c["c_crossattn"][0][:N]
+        N = min(z.shape[0], N)
+        n_row = min(z.shape[0], n_row)
+        log["reconstruction"] = self.decode_first_stage(z)
+        log["control"] = c_cat * 2.0 - 1.0
+        log["conditioning"] = log_txt_as_img(
+            (512, 512), batch[self.cond_stage_key], size=16
+        )
+
+        if plot_diffusion_rows:
+            # get diffusion row
+            diffusion_row = list()
+            z_start = z[:n_row]
+            for t in range(self.num_timesteps):
+                if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
+                    t = repeat(torch.tensor([t]), "1 -> b", b=n_row)
+                    t = t.to(self.device).long()
+                    noise = torch.randn_like(z_start)
+                    z_noisy = self.q_sample(x_start=z_start, t=t, noise=noise)
+                    diffusion_row.append(self.decode_first_stage(z_noisy))
+
+            diffusion_row = torch.stack(diffusion_row)  # n_log_step, n_row, C, H, W
+            diffusion_grid = rearrange(diffusion_row, "n b c h w -> b n c h w")
+            diffusion_grid = rearrange(diffusion_grid, "b n c h w -> (b n) c h w")
+            diffusion_grid = make_grid(diffusion_grid, nrow=diffusion_row.shape[0])
+            log["diffusion_row"] = diffusion_grid
+
+        if sample:
+            # get denoise row
+            samples, z_denoise_row = self.sample_log(
+                cond={"c_concat": [c_cat], "c_crossattn": [c]},
+                batch_size=N,
+                ddim=use_ddim,
+                ddim_steps=ddim_steps,
+                eta=ddim_eta,
+            )
+            x_samples = self.decode_first_stage(samples)
+            log["samples"] = x_samples
+            if plot_denoise_rows:
+                denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
+                log["denoise_row"] = denoise_grid
+
+        if unconditional_guidance_scale > 1.0:
+            uc_cross = self.get_unconditional_conditioning(N)
+            uc_cat = c_cat  # torch.zeros_like(c_cat)
+            uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross]}
+            samples_cfg, _ = self.sample_log(
+                cond={"c_concat": [c_cat], "c_crossattn": [c]},
+                batch_size=N,
+                ddim=use_ddim,
+                ddim_steps=ddim_steps,
+                eta=ddim_eta,
+                unconditional_guidance_scale=unconditional_guidance_scale,
+                unconditional_conditioning=uc_full,
+            )
+            x_samples_cfg = self.decode_first_stage(samples_cfg)
+            log[f"samples_cfg_scale_{unconditional_guidance_scale:.2f}"] = x_samples_cfg
+
+        return log
+
+    @torch.no_grad()
+    def sample_log(self, cond, batch_size, ddim, ddim_steps, **kwargs):
+        ddim_sampler = DDIMSampler(self)
+        b, c, h, w = cond["c_concat"][0].shape
+        shape = (self.channels, h // 8, w // 8)
+        samples, intermediates = ddim_sampler.sample(
+            ddim_steps, batch_size, shape, cond, verbose=False, **kwargs
+        )
+        return samples, intermediates
+
+    def configure_optimizers(self):
+        lr = self.learning_rate
+        params = list(self.control_model.parameters())
+        if not self.sd_locked:
+            params += list(self.model.diffusion_model.output_blocks.parameters())
+            params += list(self.model.diffusion_model.out.parameters())
+        opt = torch.optim.AdamW(params, lr=lr)
+        return opt
+
+    def low_vram_shift(self, is_diffusing):
+        if is_diffusing:
+            self.model = self.model.cuda()
+            self.control_model = self.control_model.cuda()
+            self.first_stage_model = self.first_stage_model.cpu()
+            self.cond_stage_model = self.cond_stage_model.cpu()
+        else:
+            self.model = self.model.cpu()
+            self.control_model = self.control_model.cpu()
+            self.first_stage_model = self.first_stage_model.cuda()
+            self.cond_stage_model = self.cond_stage_model.cuda()
+
+
+class CrossControlLDM(ControlLDM):
+    def __init__(
+        self,
+        style_stage_config=None,
+        style_key=None,
+        control_dropout=0,
+        style_dropout=0,
+        guidance_scale=7,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.style_key = style_key
         self.control_dropout = control_dropout
         self.style_dropout = style_dropout
         self.guidance_scale = guidance_scale
-        self.concat_encode_channels = concat_encode_channels
 
         self.has_style_stage = False
         if style_stage_config is not None:
             self.instantiate_style_stage(style_stage_config)
-
-        # self.style_encoder = FrozenClipImageEmbedder()
-
-        # open question
-        # - where is time(step?) embedding needed for attention
-        # - where is it added?
-        # - do I still need to do something for the img conditioning
 
     def instantiate_style_stage(self, config):
         self.has_style_stage = True
@@ -465,43 +621,46 @@ class ControlLDM(LatentDiffusion):
     ):
         x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs)
 
+        c = c["c_crossattn"][0]
+
         style = None
         embed = None
-        if self.style_key is not None:
-            if not self.has_style_stage:
-                style, _ = super().get_input(batch, self.style_key, *args, **kwargs)
-            else:
-                style = batch[self.style_key]
-                if bs is not None:
-                    style = style[:bs]
 
-                style = style.to(self.device)
-                style = self.style_encoder(style)
-                style, embed = style.last_hidden_state, style.pooler_output
+        style = batch[self.style_key]
+        if bs is not None:
+            style = style[:bs]
 
-                if dropout_style:
-                    # if used, could potentially add noise here similar to unclip
-                    embed = (
-                        torch.bernoulli(
-                            (1.0 - self.style_dropout)
-                            * torch.ones(embed.shape[0], device=embed.device)[:, None]
-                        )
-                        * embed
-                    )
-                    # check whether this should really just be 0
-                    # or clip img embedding of "neutral" image
+        style = style.to(self.device)
 
-                    # maybe noise here as well? maybe bit different though because
-                    # it's unpooled embedding
-                    style = (
-                        torch.bernoulli(
-                            (1.0 - self.style_dropout)
-                            * torch.ones(style.shape[0], device=style.device)[
-                                :, None, None
-                            ]
-                        )
-                        * style
-                    )
+        # style img comes in [-1, 1]
+        # style_encoder expects [0, 255] uint8
+        style = (style + 1) * 127.5
+        style = style.type(torch.uint8)
+
+        style = self.style_encoder(style)
+        style, embed = style.last_hidden_state, style.pooler_output
+
+        if dropout_style:
+            # if used, could potentially add noise here similar to unclip
+            embed = (
+                torch.bernoulli(
+                    (1.0 - self.style_dropout)
+                    * torch.ones(embed.shape[0], device=embed.device)[:, None]
+                )
+                * embed
+            )
+            # check whether this should really just be 0
+            # or clip img embedding of "neutral" image
+
+            # maybe noise here as well? maybe bit different though because
+            # it's unpooled embedding
+            style = (
+                torch.bernoulli(
+                    (1.0 - self.style_dropout)
+                    * torch.ones(style.shape[0], device=style.device)[:, None, None]
+                )
+                * style
+            )
 
         control = batch[self.control_key]
         if bs is not None:
@@ -509,13 +668,6 @@ class ControlLDM(LatentDiffusion):
         control = control.to(self.device)
         control = einops.rearrange(control, "b h w c -> b c h w")
         control = control.to(memory_format=torch.contiguous_format).float()
-
-        if self.concat_encode_channels is not None:
-            encoder_posterior = self.encode_first_stage(
-                control[:, self.concat_encode_channels :]
-            )
-            z_style = self.get_first_stage_encoding(encoder_posterior).detach()
-            control = torch.cat([control[:, : self.concat_encode_channels], z_style], 0)
 
         if dropout_control:
             control = (
@@ -548,10 +700,6 @@ class ControlLDM(LatentDiffusion):
         )
         c_embed = torch.cat(cond["c_embed"], 1) if self.has_style_stage else None
 
-        if self.add_sd_context:
-            # use img embedding for both SD and ControlNet
-            cond_txt = control_txt
-
         # here I could maybe add my own cross attention for images
 
         if cond["c_concat"] is None:
@@ -580,14 +728,6 @@ class ControlLDM(LatentDiffusion):
             )
 
         return eps
-
-    @torch.no_grad()
-    def get_unconditional_conditioning(self, N):
-        return self.get_learned_conditioning([""] * N)
-
-    @torch.no_grad()
-    def get_unconditional_conditioning_style(self, N):
-        return self.get_learned_conditioning([""] * N)
 
     @torch.no_grad()
     def log_images(
@@ -633,10 +773,6 @@ class ControlLDM(LatentDiffusion):
         if self.style_key:
             style_img = batch[self.style_key][:N]
             style_img = einops.rearrange(style_img, "b h w c -> b c h w")
-            if self.has_style_stage:
-                # style image is in [0,255] as that's what the clip image embedder expects
-                # so we normalize it to what the image logger expects
-                style_img = style_img / 127.5 - 1.0
             log["style"] = style_img
 
         if "source" in batch:
@@ -654,7 +790,7 @@ class ControlLDM(LatentDiffusion):
 
         uc_cross = self.get_unconditional_conditioning(N)
         uc_cat = torch.zeros_like(c_cat)
-        uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross]}
+        uc_full = {"c_concat": [c_cat], "c_crossattn": [uc_cross]}
 
         if "c_style" in c:
             c_style = c["c_style"][0][:N]
@@ -700,23 +836,204 @@ class ControlLDM(LatentDiffusion):
         )
         return samples, intermediates
 
-    def configure_optimizers(self):
-        lr = self.learning_rate
-        params = list(self.control_model.parameters())
-        if not self.sd_locked:
-            params += list(self.model.diffusion_model.output_blocks.parameters())
-            params += list(self.model.diffusion_model.out.parameters())
-        opt = torch.optim.AdamW(params, lr=lr)
-        return opt
 
-    def low_vram_shift(self, is_diffusing):
-        if is_diffusing:
-            self.model = self.model.cuda()
-            self.control_model = self.control_model.cuda()
-            self.first_stage_model = self.first_stage_model.cpu()
-            self.cond_stage_model = self.cond_stage_model.cpu()
+class ConcatControlLDM(ControlLDM):
+    def __init__(
+        self,
+        style_key,
+        control_dropout=0,
+        style_dropout=0,
+        guidance_scale=7,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+        self.style_key = style_key
+        self.control_dropout = control_dropout
+        self.style_dropout = style_dropout
+        self.guidance_scale = guidance_scale
+
+    @torch.no_grad()
+    def get_input(
+        self,
+        batch,
+        k,
+        bs=None,
+        dropout_control=True,
+        dropout_style=True,
+        *args,
+        **kwargs,
+    ):
+        x, c = super().get_input(batch, self.first_stage_key, *args, **kwargs)
+
+        c = c["c_crossattn"][0]
+
+        style = batch[self.style_key]
+        if bs is not None:
+            style = style[:bs]
+        style = style.to(self.device)
+        style = einops.rearrange(style, "b h w c -> b c h w")
+        style = style.to(memory_format=torch.contiguous_format).float()
+        # style img is in [-1, 1]
+        # lets move it to [0, 1] to match the other controlnet input
+        style = (style + 1.0) / 2.0
+
+        if dropout_style:
+            # maybe noise here as well? maybe bit different though because
+            # it's unpooled embedding
+            style = (
+                torch.bernoulli(
+                    (1.0 - self.style_dropout)
+                    * torch.ones(style.shape[0], device=style.device)[
+                        :, None, None, None
+                    ]
+                )
+                * style
+            )
+
+        control = batch[self.control_key]
+        if bs is not None:
+            control = control[:bs]
+        control = control.to(self.device)
+        control = einops.rearrange(control, "b h w c -> b c h w")
+        control = control.to(memory_format=torch.contiguous_format).float()
+
+        if dropout_control:
+            control = (
+                torch.bernoulli(
+                    (1.0 - self.control_dropout)
+                    * torch.ones(control.shape[0], device=control.device)[
+                        :, None, None, None
+                    ]
+                )
+                * control
+            )
+
+        # we simply concat style and control along the channel axis
+        control = torch.cat([control, style], axis=1)
+
+        conditioning = dict(c_crossattn=[c], c_concat=[control])
+
+        return x, conditioning
+
+    def apply_model(self, x_noisy, t, cond, *args, **kwargs):
+        assert isinstance(cond, dict)
+        diffusion_model = self.model.diffusion_model
+
+        cond_txt = torch.cat(cond["c_crossattn"], 1)
+
+        if cond["c_concat"] is None:
+            eps = diffusion_model(
+                x=x_noisy,
+                timesteps=t,
+                context=cond_txt,
+                control=None,
+                only_mid_control=self.only_mid_control,
+            )
         else:
-            self.model = self.model.cpu()
-            self.control_model = self.control_model.cpu()
-            self.first_stage_model = self.first_stage_model.cuda()
-            self.cond_stage_model = self.cond_stage_model.cuda()
+            control = self.control_model(
+                x=x_noisy,
+                hint=torch.cat(cond["c_concat"], 1),
+                timesteps=t,
+                context=cond_txt,
+            )
+            control = [c * scale for c, scale in zip(control, self.control_scales)]
+            eps = diffusion_model(
+                x=x_noisy,
+                timesteps=t,
+                context=cond_txt,
+                control=control,
+                only_mid_control=self.only_mid_control,
+            )
+
+        return eps
+
+    @torch.no_grad()
+    def log_images(
+        self,
+        batch,
+        N=4,
+        n_row=2,
+        sample=False,
+        ddim_steps=50,
+        ddim_eta=0.0,
+        return_keys=None,
+        quantize_denoised=True,
+        inpaint=True,
+        plot_denoise_rows=False,
+        plot_progressive_rows=True,
+        plot_diffusion_rows=False,
+        unconditional_guidance_scale=9.0,
+        unconditional_guidance_label=None,
+        use_ema_scope=True,
+        **kwargs,
+    ):
+        use_ddim = ddim_steps is not None
+
+        unconditional_guidance_scale = self.guidance_scale
+
+        log = dict()
+
+        z, c = self.get_input(
+            batch,
+            self.first_stage_key,
+            bs=N,
+            dropout_control=False,
+            dropout_style=False,
+        )
+
+        if self.style_key:
+            style_img = batch[self.style_key][:N]
+            style_img = einops.rearrange(style_img, "b h w c -> b c h w")
+            log["style"] = style_img
+
+        if "source" in batch:
+            style_img = batch["source"][:N]
+            style_img = einops.rearrange(style_img, "b h w c -> b c h w")
+            log["style"] = style_img
+
+        c_cat, c_crossattn = (
+            c["c_concat"][0][:N],
+            c["c_crossattn"][0][:N],
+        )
+        c_full = {"c_concat": [c_cat], "c_crossattn": [c_crossattn]}
+
+        uc_cross = self.get_unconditional_conditioning(N)
+        uc_cat = c_cat.clone()
+        # only set the concated style image to 0
+        # style is in [0, 1] so check if 0 makes sense
+        uc_cat[:, 3:, :, :] = 0.0
+        uc_full = {"c_concat": [uc_cat], "c_crossattn": [uc_cross]}
+
+        N = min(z.shape[0], N)
+        n_row = min(z.shape[0], n_row)
+        log["conditioning"] = log_txt_as_img(
+            (512, 512), batch[self.cond_stage_key], size=16
+        )
+        log["control"] = c_cat * 2.0 - 1.0
+        log["reconstruction"] = self.decode_first_stage(z)
+
+        samples_cfg, _ = self.sample_log(
+            cond=c_full,
+            batch_size=N,
+            ddim=use_ddim,
+            ddim_steps=ddim_steps,
+            eta=ddim_eta,
+            unconditional_guidance_scale=unconditional_guidance_scale,
+            unconditional_conditioning=uc_full,
+        )
+        x_samples_cfg = self.decode_first_stage(samples_cfg)
+        log[f"samples_cfg_scale_{unconditional_guidance_scale:.2f}"] = x_samples_cfg
+
+        return log
+
+    @torch.no_grad()
+    def sample_log(self, cond, batch_size, ddim, ddim_steps, **kwargs):
+        ddim_sampler = DDIMSampler(self)
+        b, c, h, w = cond["c_concat"][0].shape
+        shape = (self.channels, h // 8, w // 8)
+        samples, intermediates = ddim_sampler.sample(
+            ddim_steps, batch_size, shape, cond, verbose=False, **kwargs
+        )
+        return samples, intermediates
