@@ -87,6 +87,8 @@ class ControlNetHED_Apache2(torch.nn.Module):
         return projection1, projection2, projection3, projection4, projection5
 
 
+# expects input img [h, w, c] in [0, 255]
+# outputs [h, w] in [0, 255]
 class HEDdetector:
     def __init__(self):
         remote_model_path = "https://huggingface.co/lllyasviel/Annotators/resolve/main/ControlNetHED.pth"
