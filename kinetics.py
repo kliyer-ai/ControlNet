@@ -181,7 +181,9 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
         if idx in self.invalid:
             return self.sample_when_corrupt(idx, new=False)
 
-        example = copy.deepcopy(self.labels[idx])
+        # dont need the labels
+        # and results in weird pytroch lightning batch size warnings
+        example = dict()  # copy.deepcopy(self.labels[idx])
 
         # this can be done better in future currently sequence length and sequence_time are not used if filtering is applied
         if self.apply_filter:
@@ -300,6 +302,8 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
             example["hed_end_frame"] = (
                 apply_hed(self._inverse_preprocess(example["end_frame"])) / 255.0
             )
+
+        example["txt"] = "a professional, detailed, high-quality image"
 
         return example
 
