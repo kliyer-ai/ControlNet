@@ -170,7 +170,7 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
 
         idx = int(
             np.random.choice(
-                list(set(np.arange(len(self.labels))).difference(self.invalid)), 1
+                list(set(np.arange(len(self.indices))).difference(self.invalid)), 1
             )
         )
         return self.__getitem__(idx)
