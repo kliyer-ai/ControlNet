@@ -1,15 +1,17 @@
 model:
-  target: cldm.cldm.ControlLDM
+  target: cldm.cldm.ConcatControlLDM
   params:
-    control_dropout: 0.0
+    control_dropout: 0.25
+    style_dropout: 0.25
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
     log_every_t: 200
     timesteps: 1000
-    first_stage_key: "jpg"
+    first_stage_key: "intermediate_frame"
     cond_stage_key: "txt"
-    control_key: "hint"
+    control_key: "hed_intermediate_frame"
+    style_key: "start_frame"
     image_size: 64
     channels: 4
     cond_stage_trainable: false
@@ -18,7 +20,6 @@ model:
     scale_factor: 0.18215
     use_ema: False
     only_mid_control: False
-    add_sd_context: False
     guidance_scale: 7
 
     control_stage_config:
