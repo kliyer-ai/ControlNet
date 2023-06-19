@@ -183,7 +183,7 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
 
         # dont need the labels
         # and results in weird pytroch lightning batch size warnings
-        example = dict()  # copy.deepcopy(self.labels[idx])
+        example = copy.deepcopy(self.labels[idx])
 
         # this can be done better in future currently sequence length and sequence_time are not used if filtering is applied
         if self.apply_filter:
@@ -260,6 +260,9 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
 
         # Preprocess the seq
         seq = self._preprocess(seq)
+
+        # reset example
+        example = dict()
 
         if not self.flow_only:
             intermediate = self.prng.randint(
