@@ -191,6 +191,8 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
                 pts, fps = read_video_timestamps(filename=example["video_path"])
                 # sample a random subsequence (one could improve this in the future by adding more data augmentation)
                 temp = np.random.randint(len(self.timestamps_start[oldidx]))
+                if self.mode == "test" or self.mode == "val":
+                    temp = 0  # always take first sequence for reproducability
                 start = self.timestamps_start[oldidx][temp]  # in frames
                 end = self.timestamps_end[oldidx][temp]  # in frames
 
@@ -221,7 +223,7 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
                     )  # <- BAD! maybe fix this in the future
                     start_sec = (
                         0
-                        if self.mode == "test"
+                        if self.mode == "test" or self.mode == "val"
                         else self.prng.randint(0, video_sec - seq_sec + 1)
                     )
                     seq, _, _ = read_video(
@@ -234,7 +236,7 @@ class Kinetics700InterpolateBase(Dataset, PRNGMixin):
                 elif self.seq_time is not None and self.seq_length is None:
                     start_sec = (
                         0
-                        if self.mode == "test"
+                        if self.mode == "test" or self.mode == "val"
                         else self.prng.randint(
                             0, len(pts) - int(np.ceil(self.seq_time * fps))
                         )
