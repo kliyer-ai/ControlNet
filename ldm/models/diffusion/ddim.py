@@ -310,7 +310,6 @@ class DDIMSampler(object):
             model_output = model_uncond + unconditional_guidance_scale * (
                 model_t - model_uncond
             )
-            model_output = model_output.clip(-1, 1)
 
         if self.model.parameterization == "v":
             e_t = self.model.predict_eps_from_z_and_v(x, t, model_output)
@@ -365,7 +364,7 @@ class DDIMSampler(object):
         if noise_dropout > 0.0:
             noise = torch.nn.functional.dropout(noise, p=noise_dropout)
         x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
-        return x_prev, pred_x0
+        return x_prev.clip(-1, 1), pred_x0.clip(-1, 1)
 
     @torch.no_grad()
     def encode(
